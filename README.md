@@ -1,18 +1,18 @@
 # TRX Level Converter
 
-A web service for converting classic Tomb Raider I, II, and III game files into a format compatible with the [TRX engine](https://github.com/LostArtefacts/TRX).
+A web service for converting classic Tomb Raider I, II, and III custom levels into a format compatible with the [TRX engine](https://github.com/LostArtefacts/TRX).
 
-Upload a ZIP of your original game data, and the converter will produce a ready-to-use package with a generated gameflow, translated scripts, mapped file structure, and all the fixups TRX expects.
+Upload a ZIP of your custom level data, and the converter will produce a ready-to-use package with a generated gameflow, translated scripts, mapped file structure, and all the fixups TRX expects.
 
 ## How it works
 
-1. **Upload** your game files as a ZIP or tar.gz archive (or select a folder).
+1. **Upload** your custom level files as a ZIP or tar.gz archive (or select a folder).
 2. **Configure** — the converter auto-detects the game version (TR1 / TR2 / TR3) and presents options including outfit import preferences.
 3. **Download** — conversion runs entirely in your browser. The result is uploaded to temporary storage and you receive a one-time download link that expires after one hour.
 
 ### What the converter does
 
-- Extracts and classifies game files (levels, music, SFX, FMVs, cutscenes, injections)
+- Extracts and classifies level files (levels, music, SFX, FMVs, cutscenes, injections)
 - Maps everything into the directory structure TRX expects (`games/<mod>/levels/`, `music/`, `fmv/`, etc.)
 - Strips remastered SFX headers so original and remastered `MAIN.SFX` files both work
 - Translates `TOMBPC.DAT` binary game scripts into TRX gameflow events (level sequencing, music triggers, inventory items, cutscenes, FMVs)
