@@ -6,6 +6,18 @@ import { getTemplate, getTemplateFiles, getCfgFile, getCfgFiles } from '../templ
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
+// Track numbers from TRX catalog_music.csv that are engine-hardcoded
+// and must remain at their exact file position (not shifted by cdOffset).
+const TR2_CATALOG_TRACKS = new Set([
+    18, 19, 20, 21, 22, 23, 24, 43, 48, 49, 57, 59,
+]);
+
+const TR3_CATALOG_TRACKS = new Set([
+    82, 83, 86, 89, 90, 95, 96, 98,
+    107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119,
+    122,
+]);
+
 export function setupCustomGameflow(
     mappedFiles: MappedFile[],
     modDir: string,
@@ -241,6 +253,56 @@ export function setupCustomGameflow(
                     titleEntries.push({ title: title });
                 }
 
+                if (gameflow.levels.length > 0) {
+                    const firstLvl = gameflow.levels[0];
+                    const seq: AnyObj[] = firstLvl.sequence || [];
+                    let hasGiveItem = false;
+                    let hasRemoveWeapons = false;
+                    for (let si = 0; si < seq.length; si++) {
+                        if (seq[si].type === 'give_item')
+                            hasGiveItem = true;
+                        if (seq[si].type === 'remove_weapons')
+                            hasRemoveWeapons = true;
+                    }
+                    if (!hasGiveItem && !hasRemoveWeapons) {
+                        const defaults: AnyObj[] =
+                            templateMod === 'tr3-level'
+                                ? [
+                                    { type: 'give_item',
+                                      object_id: 'small_medipack' },
+                                    { type: 'give_item',
+                                      object_id: 'large_medipack' },
+                                    { type: 'give_item',
+                                      object_id: 'flare',
+                                      quantity: 2 },
+                                ]
+                                : [
+                                    { type: 'give_item',
+                                      object_id: 'shotgun' },
+                                    { type: 'give_item',
+                                      object_id: 'small_medipack' },
+                                    { type: 'give_item',
+                                      object_id: 'large_medipack' },
+                                    { type: 'give_item',
+                                      object_id: 'flare',
+                                      quantity: 2 },
+                                ];
+                        let loopIdx = -1;
+                        for (let si = 0; si < seq.length; si++) {
+                            if (seq[si].type === 'loop_game') {
+                                loopIdx = si;
+                                break;
+                            }
+                        }
+                        if (loopIdx >= 0) {
+                            seq.splice(loopIdx, 0, ...defaults);
+                        } else {
+                            seq.unshift(...defaults);
+                        }
+                        firstLvl.sequence = seq;
+                    }
+                }
+
                 const gfJson = JSON.stringify(gameflow, null, 4);
                 const gfData = new TextEncoder().encode(gfJson);
                 const gfPath = modPrefix + 'gameflow.json5';
@@ -251,16 +313,42 @@ export function setupCustomGameflow(
 
                 if (scriptInfo.cdOffset !== 0) {
                     const mPrefix = modPrefix + 'music/';
+                    const catalogTracks = templateMod === 'tr3-level'
+                        ? TR3_CATALOG_TRACKS : TR2_CATALOG_TRACKS;
+
+                    const sourceNums = new Set<number>();
                     for (let i = 0; i < result.length; i++) {
                         const mp = result[i].path;
                         if (mp.indexOf(mPrefix) !== 0) continue;
                         const fn = mp.substring(mPrefix.length);
                         const m = fn.match(/^(\d+)(\..*)/);
-                        if (!m) continue;
-                        const cdName = mPrefix
-                            + (parseInt(m[1])
-                               + scriptInfo.cdOffset) + m[2];
-                        result[i].path = cdName;
+                        if (m) sourceNums.add(parseInt(m[1]));
+                    }
+
+                    const catalogInSource = new Set<number>();
+                    sourceNums.forEach(function(n) {
+                        if (catalogTracks.has(n))
+                            catalogInSource.add(n);
+                    });
+
+                    let i = 0;
+                    while (i < result.length) {
+                        const mp = result[i].path;
+                        if (mp.indexOf(mPrefix) !== 0) { i++; continue; }
+                        const fn = mp.substring(mPrefix.length);
+                        const m = fn.match(/^(\d+)(\..*)/);
+                        if (!m) { i++; continue; }
+                        const srcNum = parseInt(m[1]);
+                        const dstNum = srcNum + scriptInfo.cdOffset;
+
+                        if (catalogInSource.has(srcNum)) {
+                            i++;
+                        } else if (catalogInSource.has(dstNum)) {
+                            result.splice(i, 1);
+                        } else {
+                            result[i].path = mPrefix + dstNum + m[2];
+                            i++;
+                        }
                     }
                 }
                 return result;

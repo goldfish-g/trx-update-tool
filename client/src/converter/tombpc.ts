@@ -306,7 +306,12 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
             sequences.push(null);
         }
 
-        for (let seq = 0; seq < numLevels; seq++) {
+        for (let seq = 0; seq <= numLevels; seq++) {
+            if (seq === numLevels
+                && scriptOffsets[numLevels] >= scriptSize) {
+                continue;
+            }
+
             const ops = readOpcodes(seq);
             const result = translateSequence(ops);
 
@@ -320,6 +325,7 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
 
             const idx = (levelTarget >= 0 && levelTarget < numLevels)
                 ? levelTarget : seq;
+            if (idx >= numLevels) continue;
             musicTracks[idx] = result.music_track;
             sequences[idx] = result.sequence;
         }
