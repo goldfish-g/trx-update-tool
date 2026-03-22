@@ -4,6 +4,7 @@ import path from "node:path";
 
 interface FileMetadata {
   filepath: string;
+  downloadName: string;
   createdAt: Date;
   downloaded: boolean;
 }
@@ -27,14 +28,20 @@ export class Storage {
    * Write `data` to disk under a UUID-v4 filename.
    * Returns a download token and its expiry time (1 hour from now).
    */
-  async storeFile(data: Buffer): Promise<{ token: string; expiresAt: Date }> {
+  async storeFile(data: Buffer, slug?: string): Promise<{ token: string; expiresAt: Date }> {
     const token = randomUUID();
     const filepath = path.join(this.dir, token);
 
     await fs.writeFile(filepath, data);
 
+    const shortId = token.split('-')[0];
+    const downloadName = slug
+      ? `${slug}-${shortId}.zip`
+      : `${token}.zip`;
+
     this.files.set(token, {
       filepath,
+      downloadName,
       createdAt: new Date(),
       downloaded: false,
     });
@@ -77,7 +84,7 @@ export class Storage {
       // already gone — ignore
     }
 
-    return { data, filename: `${token}.zip` };
+    return { data, filename: meta.downloadName };
   }
 
   /**

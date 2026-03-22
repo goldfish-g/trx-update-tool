@@ -49,7 +49,10 @@ async function main(): Promise<void> {
       return reply.code(400).send({ error: "Uploaded file is empty" });
     }
 
-    const { token, expiresAt } = await storage.storeFile(data);
+    const slug = file.filename
+      ? file.filename.replace(/\.zip$/i, '')
+      : undefined;
+    const { token, expiresAt } = await storage.storeFile(data, slug);
 
     return reply.send({
       token,

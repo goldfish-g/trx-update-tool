@@ -18,11 +18,24 @@ type AppState =
   | { step: 'done'; downloadUrl: string; expiresAt: string }
   | { step: 'error'; message: string };
 
-const VERSION_MODS: Record<GameVersion, { modId: string; templateMod: string }> = {
-  tr1: { modId: 'tr1-custom', templateMod: 'tr1-level' },
-  tr2: { modId: 'tr2-custom', templateMod: 'tr2-level' },
-  tr3: { modId: 'tr3-custom', templateMod: 'tr3-level' },
+const TEMPLATE_MODS: Record<GameVersion, string> = {
+  tr1: 'tr1-level',
+  tr2: 'tr2-level',
+  tr3: 'tr3-level',
 };
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    || 'custom';
+}
+
+function makeModId(version: GameVersion, title: string): string {
+  return version + '-' + slugify(title);
+}
 
 function detectGameVersion(entries: MappedFile[]): GameVersion {
   for (const entry of entries) {
@@ -43,6 +56,7 @@ function App() {
   const [gameVersion, setGameVersion] = useState<GameVersion>('tr2');
   const [useOutfitImport, setUseOutfitImport] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
+  const [modTitle, setModTitle] = useState('');
 
   const handleFilesSelected = useCallback(async (files: FileList) => {
     try {
@@ -78,7 +92,18 @@ function App() {
       const detected = detectGameVersion(entries);
       setGameVersion(detected);
 
-      const { languages } = processFiles(entries, VERSION_MODS[detected].modId);
+      const { languages } = processFiles(entries, detected + '-custom');
+
+      let defaultTitle = '';
+      if (files.length === 1) {
+        defaultTitle = files[0].name.replace(/\.(zip|tar\.gz|tgz)$/i, '');
+      } else if (files.length > 0) {
+        const rel = (files[0] as File & { webkitRelativePath?: string }).webkitRelativePath;
+        if (rel) {
+          defaultTitle = rel.split('/')[0];
+        }
+      }
+      setModTitle(defaultTitle);
 
       setState({ step: 'options', entries, languages });
     } catch (err) {
@@ -88,21 +113,23 @@ function App() {
 
   const handleStartConversion = useCallback(async (entries: MappedFile[]) => {
     try {
-      await runConversion(entries, gameVersion, useOutfitImport, selectedLanguage ?? undefined);
+      await runConversion(entries, gameVersion, useOutfitImport, selectedLanguage ?? undefined, modTitle);
     } catch (err) {
       setState({ step: 'error', message: (err as Error).message || 'Conversion failed.' });
     }
-  }, [gameVersion, useOutfitImport, selectedLanguage]);
+  }, [gameVersion, useOutfitImport, selectedLanguage, modTitle]);
 
   async function runConversion(
     entries: MappedFile[],
     version: GameVersion,
     outfitImport: boolean,
     language: string | undefined,
+    title: string,
   ) {
     setState({ step: 'converting', message: 'Mapping files...', progress: 0.5 });
 
-    const { modId, templateMod } = VERSION_MODS[version];
+    const modId = makeModId(version, title);
+    const templateMod = TEMPLATE_MODS[version];
 
     let filteredEntries = entries;
     if (language) {
@@ -117,7 +144,7 @@ function App() {
 
     setState({ step: 'converting', message: 'Generating gameflow...', progress: 0.65 });
 
-    const finalFiles = setupCustomGameflow(mapped, modId, templateMod, outfitImport);
+    const finalFiles = setupCustomGameflow(mapped, modId, templateMod, outfitImport, title);
 
     setState({ step: 'converting', message: 'Creating ZIP...', progress: 0.8 });
 
@@ -126,7 +153,7 @@ function App() {
     setState({ step: 'uploading', message: 'Uploading to server...', progress: 0.9 });
 
     const formData = new FormData();
-    formData.append('file', new Blob([zipData as unknown as ArrayBuffer], { type: 'application/zip' }), `trx-${modId}.zip`);
+    formData.append('file', new Blob([zipData as unknown as ArrayBuffer], { type: 'application/zip' }), `${modId}.zip`);
 
     const res = await fetch('/api/store', { method: 'POST', body: formData });
     if (!res.ok) {
@@ -143,6 +170,7 @@ function App() {
     setGameVersion('tr2');
     setUseOutfitImport(false);
     setSelectedLanguage(null);
+    setModTitle('');
   }, []);
 
   return (
@@ -167,6 +195,19 @@ function App() {
                   <p className="font-medium">This level uses a classic format that will be converted for the TRX engine.</p>
                   <p className="text-sm opacity-80 mt-1">This almost always works fine, but may sometimes introduce issues such as wrong level order, incorrect item names, missing music triggers, or other differences from the original game.</p>
                 </div>
+              </div>
+
+              <div className="form-control w-full">
+                <label className="label">
+                  <span className="label-text">Level Name</span>
+                </label>
+                <input
+                  type="text"
+                  className="input input-bordered w-full"
+                  value={modTitle}
+                  onChange={(e) => setModTitle(e.target.value)}
+                  placeholder="Enter a name for this level pack"
+                />
               </div>
 
               <div className="form-control w-full">

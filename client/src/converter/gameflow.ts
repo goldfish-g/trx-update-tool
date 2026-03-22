@@ -23,9 +23,11 @@ export function setupCustomGameflow(
     modDir: string,
     templateMod: string,
     useOutfitImport: boolean,
+    modTitle: string = '',
 ): MappedFile[] {
     const result = mappedFiles.slice();
     const modPrefix = 'games/' + modDir + '/';
+    const extendsBase = templateMod.replace('-level', '');
     const defaultOutfit = useOutfitImport
         ? 'level_default'
         : templateMod.replace('-level', '_classic');
@@ -121,6 +123,10 @@ export function setupCustomGameflow(
                     if (titleEntry) {
                         tplGf.title = titleEntry;
                     }
+                    tplGf.extends = extendsBase;
+                    if (modTitle) {
+                        tplGf.name = modTitle;
+                    }
                     const gfJson = JSON.stringify(tplGf, null, 4);
                     const gfBytes = new TextEncoder().encode(gfJson);
                     gfEntry.data = gfBytes;
@@ -177,6 +183,11 @@ export function setupCustomGameflow(
                     gfDirty = true;
                 }
             }
+        }
+        gameflow.extends = extendsBase;
+        gfDirty = true;
+        if (modTitle) {
+            gameflow.name = modTitle;
         }
         if (gfDirty) {
             const gfJson = JSON.stringify(gameflow, null, 4);
@@ -303,6 +314,10 @@ export function setupCustomGameflow(
                     }
                 }
 
+                gameflow.extends = extendsBase;
+                if (modTitle) {
+                    gameflow.name = modTitle;
+                }
                 const gfJson = JSON.stringify(gameflow, null, 4);
                 const gfData = new TextEncoder().encode(gfJson);
                 const gfPath = modPrefix + 'gameflow.json5';
@@ -395,6 +410,10 @@ export function setupCustomGameflow(
         return entry;
     });
 
+    gameflow.extends = extendsBase;
+    if (modTitle) {
+        gameflow.name = modTitle;
+    }
     const gameflowJson = JSON.stringify(gameflow, null, 4);
     const gameflowData = new TextEncoder().encode(gameflowJson);
     const gameflowPath = modPrefix + 'gameflow.json5';
