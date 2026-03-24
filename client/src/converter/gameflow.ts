@@ -21,22 +21,21 @@ const TR3_CATALOG_TRACKS = new Set([
 export function setupCustomGameflow(
     mappedFiles: MappedFile[],
     modDir: string,
-    templateMod: string,
+    gameVersion: number,
     useOutfitImport: boolean,
     modTitle: string = '',
 ): MappedFile[] {
     const result = mappedFiles.slice();
     const modPrefix = 'games/' + modDir + '/';
-    const extendsBase = templateMod.replace('-level', '');
-    const engineVersion = templateMod === 'tr1-level' ? 1
-        : templateMod === 'tr3-level' ? 3 : 2;
+    const templateMod = `tr${gameVersion}-level`;
+    const extendsBase = `tr${gameVersion}`;
     const defaultOutfit = useOutfitImport
         ? 'level_default'
-        : templateMod.replace('-level', '_classic');
+        : `tr${gameVersion}_classic`;
 
     const outfitFiles: MappedFile[] = [];
     if (useOutfitImport) {
-        outfitFiles.push(...injectLevelDefaultOutfit(modDir, templateMod));
+        outfitFiles.push(...injectLevelDefaultOutfit(modDir, gameVersion));
     }
 
     let hasGameflow = false;
@@ -125,7 +124,7 @@ export function setupCustomGameflow(
                     if (titleEntry) {
                         tplGf.title = titleEntry;
                     }
-                    tplGf.engine = engineVersion;
+                    tplGf.engine = gameVersion;
                     tplGf.extends = extendsBase;
                     if (modTitle) {
                         tplGf.name = modTitle;
@@ -187,7 +186,7 @@ export function setupCustomGameflow(
                 }
             }
         }
-        gameflow.engine = engineVersion;
+        gameflow.engine = gameVersion;
         gameflow.extends = extendsBase;
         gfDirty = true;
         if (modTitle) {
@@ -212,8 +211,7 @@ export function setupCustomGameflow(
         return result;
     }
 
-    if (scriptEntry
-        && (templateMod === 'tr2-level' || templateMod === 'tr3-level')) {
+    if (scriptEntry && gameVersion >= 2) {
         try {
             const scriptInfo = parseTR2Script(scriptEntry.data);
             if (scriptInfo && scriptInfo.filenames.length > 1) {
@@ -281,7 +279,7 @@ export function setupCustomGameflow(
                     }
                     if (!hasGiveItem && !hasRemoveWeapons) {
                         const defaults: AnyObj[] =
-                            templateMod === 'tr3-level'
+                            gameVersion === 3
                                 ? [
                                     { type: 'give_item',
                                       object_id: 'small_medipack' },
@@ -318,7 +316,7 @@ export function setupCustomGameflow(
                     }
                 }
 
-                gameflow.engine = engineVersion;
+                gameflow.engine = gameVersion;
                 gameflow.extends = extendsBase;
                 if (modTitle) {
                     gameflow.name = modTitle;
@@ -333,7 +331,7 @@ export function setupCustomGameflow(
 
                 if (scriptInfo.cdOffset !== 0) {
                     const mPrefix = modPrefix + 'music/';
-                    const catalogTracks = templateMod === 'tr3-level'
+                    const catalogTracks = gameVersion === 3
                         ? TR3_CATALOG_TRACKS : TR2_CATALOG_TRACKS;
 
                     const sourceNums = new Set<number>();
@@ -415,7 +413,7 @@ export function setupCustomGameflow(
         return entry;
     });
 
-    gameflow.engine = engineVersion;
+    gameflow.engine = gameVersion;
     gameflow.extends = extendsBase;
     if (modTitle) {
         gameflow.name = modTitle;
@@ -434,12 +432,11 @@ export function setupCustomGameflow(
     return result;
 }
 
-function injectLevelDefaultOutfit(modDir: string, templateMod: string): MappedFile[] {
+function injectLevelDefaultOutfit(modDir: string, gameVersion: number): MappedFile[] {
     const files: MappedFile[] = [];
 
-    const isTR1 = templateMod === 'tr1-level';
     let braid: AnyObj;
-    if (isTR1) {
+    if (gameVersion === 1) {
         braid = {
             mode: 'BRAID_MODE_TR1_FULL',
             mesh_offset: 10,
@@ -453,7 +450,7 @@ function injectLevelDefaultOutfit(modDir: string, templateMod: string): MappedFi
             hair_pos: { x: 0, y: -23, z: -55 },
         };
     }
-    const gunMap = isTR1 ? 0 : (templateMod === 'tr3-level' ? 3 : 2);
+    const gunMap = gameVersion === 1 ? 0 : gameVersion === 3 ? 3 : 2;
 
     try {
         const outfitsText = getCfgFile('outfits.json5');

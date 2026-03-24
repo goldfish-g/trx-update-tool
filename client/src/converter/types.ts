@@ -3,7 +3,7 @@ export type MappedFile = {
     data: Uint8Array;
 };
 
-export type GameVersion = 'tr1' | 'tr2' | 'tr3';
+export type GameVersion = '1' | '2' | '3';
 
 export type Language = {
     code: string;
@@ -12,7 +12,7 @@ export type Language = {
 
 export type ConversionOptions = {
     modId: string;
-    templateMod: string;
+    gameVersion: number;
     useOutfitImport: boolean;
     language?: string;
 };
