@@ -28,6 +28,8 @@ export function setupCustomGameflow(
     const result = mappedFiles.slice();
     const modPrefix = 'games/' + modDir + '/';
     const extendsBase = templateMod.replace('-level', '');
+    const engineVersion = templateMod === 'tr1-level' ? 1
+        : templateMod === 'tr3-level' ? 3 : 2;
     const defaultOutfit = useOutfitImport
         ? 'level_default'
         : templateMod.replace('-level', '_classic');
@@ -123,6 +125,7 @@ export function setupCustomGameflow(
                     if (titleEntry) {
                         tplGf.title = titleEntry;
                     }
+                    tplGf.engine = engineVersion;
                     tplGf.extends = extendsBase;
                     if (modTitle) {
                         tplGf.name = modTitle;
@@ -184,6 +187,7 @@ export function setupCustomGameflow(
                 }
             }
         }
+        gameflow.engine = engineVersion;
         gameflow.extends = extendsBase;
         gfDirty = true;
         if (modTitle) {
@@ -314,6 +318,7 @@ export function setupCustomGameflow(
                     }
                 }
 
+                gameflow.engine = engineVersion;
                 gameflow.extends = extendsBase;
                 if (modTitle) {
                     gameflow.name = modTitle;
@@ -410,6 +415,7 @@ export function setupCustomGameflow(
         return entry;
     });
 
+    gameflow.engine = engineVersion;
     gameflow.extends = extendsBase;
     if (modTitle) {
         gameflow.name = modTitle;
