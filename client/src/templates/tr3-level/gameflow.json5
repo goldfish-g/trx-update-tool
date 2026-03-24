@@ -1,6 +1,8 @@
 {
     // This file is used to enable the -l argument support.
 
+    "engine": 3,
+
     "main_menu_picture": "todo.webp",
     "savegame_file_fmt": "save_tr3_custom_%02d.dat",
 

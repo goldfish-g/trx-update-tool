@@ -18,12 +18,6 @@ type AppState =
   | { step: 'done'; downloadUrl: string; expiresAt: string }
   | { step: 'error'; message: string };
 
-const TEMPLATE_MODS: Record<GameVersion, string> = {
-  tr1: 'tr1-level',
-  tr2: 'tr2-level',
-  tr3: 'tr3-level',
-};
-
 function slugify(text: string): string {
   return text
     .toLowerCase()
@@ -34,26 +28,26 @@ function slugify(text: string): string {
 }
 
 function makeModId(version: GameVersion, title: string): string {
-  return version + '-' + slugify(title);
+  return 'tr' + version + '-' + slugify(title);
 }
 
 function detectGameVersion(entries: MappedFile[]): GameVersion {
   for (const entry of entries) {
     const lower = entry.path.toLowerCase();
-    if (lower.endsWith('.phd')) return 'tr1';
+    if (lower.endsWith('.phd')) return '1';
     if (lower.endsWith('.tr2')) {
       const hasCuts = entries.some(e => e.path.toLowerCase().includes('cuts/'));
       const hasTR3Audio = entries.some(e => e.path.toLowerCase().endsWith('.wad'));
-      if (hasCuts || hasTR3Audio) return 'tr3';
-      return 'tr2';
+      if (hasCuts || hasTR3Audio) return '3';
+      return '2';
     }
   }
-  return 'tr2';
+  return '2';
 }
 
 function App() {
   const [state, setState] = useState<AppState>({ step: 'upload' });
-  const [gameVersion, setGameVersion] = useState<GameVersion>('tr2');
+  const [gameVersion, setGameVersion] = useState<GameVersion>('2');
   const [useOutfitImport, setUseOutfitImport] = useState(false);
   const [selectedLanguage, setSelectedLanguage] = useState<string | null>(null);
   const [modTitle, setModTitle] = useState('');
@@ -129,7 +123,6 @@ function App() {
     setState({ step: 'converting', message: 'Mapping files...', progress: 0.5 });
 
     const modId = makeModId(version, title);
-    const templateMod = TEMPLATE_MODS[version];
 
     let filteredEntries = entries;
     if (language) {
@@ -144,7 +137,7 @@ function App() {
 
     setState({ step: 'converting', message: 'Generating gameflow...', progress: 0.65 });
 
-    const finalFiles = setupCustomGameflow(mapped, modId, templateMod, outfitImport, title);
+    const finalFiles = setupCustomGameflow(mapped, modId, +version, outfitImport, title);
 
     setState({ step: 'converting', message: 'Creating ZIP...', progress: 0.8 });
 
@@ -167,7 +160,7 @@ function App() {
 
   const handleReset = useCallback(() => {
     setState({ step: 'upload' });
-    setGameVersion('tr2');
+    setGameVersion('2');
     setUseOutfitImport(false);
     setSelectedLanguage(null);
     setModTitle('');
@@ -219,9 +212,9 @@ function App() {
                   value={gameVersion}
                   onChange={(e) => setGameVersion(e.target.value as GameVersion)}
                 >
-                  <option value="tr1">Tomb Raider I</option>
-                  <option value="tr2">Tomb Raider II</option>
-                  <option value="tr3">Tomb Raider III</option>
+                  <option value="1">Tomb Raider I</option>
+                  <option value="2">Tomb Raider II</option>
+                  <option value="3">Tomb Raider III</option>
                 </select>
               </div>
 
