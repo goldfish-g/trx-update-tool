@@ -7,7 +7,6 @@
     "savegame_file_fmt": "save_tmp_%02d.dat",
 
     "injections": [
-        "braid.bin",
         "bubbles.bin",
         "gun_glow.bin",
         "lara_animations.bin",
@@ -18,10 +17,14 @@
         "pickup_aid.bin",
         "sprite_alignment.bin",
         "pda_model.bin",
+        "controls_models.bin",
         "font.bin",
         "winston_model.bin",
         "misc_sprites.bin",
         "lara_outfits.bin",
+        "shimmy_sfx.bin",
+        "inv_background.bin",
+        "binoculars.bin",
     ],
 
     "enable_tr2_item_drops": false,

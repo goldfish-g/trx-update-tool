@@ -6,7 +6,6 @@
     "main_menu_picture": "title_eu.webp",
     "savegame_file_fmt": "save_tr2_custom_%02d.dat",
 
-    "demo_version": false,
     "enable_tr2_item_drops": true,
     "convert_dropped_guns": true,
 
@@ -16,14 +15,16 @@
         "lara_animations.bin",
         "lara_guns.bin",
         "pda_model.bin",
+        "controls_models.bin",
         "pickup_aid.bin",
         "winston_model.bin",
-        "purple_crystal.bin",
+        "crystal.bin",
         "lara_extra.bin",
         "lara_rifle_sfx.bin",
         "secret_models_og.bin",
         "misc_sprites.bin",
         "lara_outfits.bin",
+        "binoculars.bin",
     ],
 
     "levels": [

@@ -3,10 +3,9 @@
 
     "engine": 3,
 
-    "main_menu_picture": "todo.webp",
+    "main_menu_picture": "title_eu.webp",
     "savegame_file_fmt": "save_tr3_custom_%02d.dat",
 
-    "demo_version": false,
     "enable_tr2_item_drops": true,
     "convert_dropped_guns": true,
 
@@ -15,9 +14,15 @@
         "font.bin",
         "lara_animations.bin",
         "pda_model.bin",
+        "controls_models.bin",
         "lara_extra.bin",
         "misc_sprites.bin",
         "lara_outfits.bin",
+        "pickup_aid.bin",
+        "winston_model.bin",
+        "sparks_gfx.bin",
+        "inv_background.bin",
+        "binoculars.bin",
     ],
 
     "levels": [
