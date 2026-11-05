@@ -7,9 +7,6 @@
 // here.
 
 import compatTemplate from './lua/trx_compat.lua?raw';
-import tr1GameScript from './lua/base/tr1_game.lua?raw';
-import tr2GameScript from './lua/base/tr2_game.lua?raw';
-import tr3GameScript from './lua/base/tr3_game.lua?raw';
 import { parseJSON5 } from './json5.ts';
 import { luaObjectRenames } from './objects.ts';
 import type { MappedFile } from './types.ts';
@@ -17,11 +14,6 @@ import type { MappedFile } from './types.ts';
 /** The TRX 1.x release the converter writes for. */
 export const CURRENT_RELEASE = 12;
 
-export const BASE_GAME_SCRIPTS: Record<number, string> = {
-    1: tr1GameScript,
-    2: tr2GameScript,
-    3: tr3GameScript,
-};
 
 // ---------------------------------------------------------------------------
 // Reading Lua
@@ -361,8 +353,7 @@ function header(release: number, code: string): string {
 }
 
 /** A game script run beside the one of the game it extends. */
-function composeGameScript(release: number, own: string | null, gameVersion: number): string {
-    const base = BASE_GAME_SCRIPTS[gameVersion] ?? '';
+function composeGameScript(release: number, own: string | null, base: string): string {
     const parts: string[] = [];
     if (own !== null) {
         // The game's own script keeps its line numbers, and an error in it
@@ -403,6 +394,7 @@ export function migrateScripts(
     modDir: string,
     gameVersion: number,
     release: number | null,
+    baseGameScript: string,
 ): ScriptMigration {
     const prefix = `games/${modDir}/`;
     const loose = prefix + '_loose/';
@@ -515,7 +507,7 @@ export function migrateScripts(
         if (own !== null && effective < 12) own = currentMarkupInLua(own, gameVersion);
         byPath.set(gameScriptPath, {
             path: gameScriptPath,
-            data: encoder.encode(composeGameScript(effective, own, gameVersion)),
+            data: encoder.encode(composeGameScript(effective, own, baseGameScript)),
         });
         opened++;
     }

@@ -18,11 +18,11 @@ const ship = join(trx, 'data/trx/ship');
 
 const scripts = 'client/src/converter/lua/base';
 mkdirSync(scripts, { recursive: true });
-for (const game of ['tr1', 'tr2', 'tr3']) {
+for (const game of ['tr1', 'tr2', 'tr3', 'tr3-la']) {
     copyFileSync(join(ship, 'games', game, 'scripts/_game.lua'), join(scripts, `${game}_game.lua`));
 }
 copyFileSync(join(ship, 'cfg/outfits.json5'), 'client/src/templates/cfg/outfits.json5');
-console.log('copied the TR1-3 game scripts and cfg/outfits.json5');
+console.log('copied the TR1-3 and TR3:LA game scripts and cfg/outfits.json5');
 
 // The files a game's own copies are merged into: what TRX ships for each game
 // now, so the merge keeps what TRX has added since the copy was made.

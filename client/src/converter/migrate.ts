@@ -7,7 +7,8 @@
 
 import { migrateDataFiles } from './datafiles.ts';
 import { applyLevelRules } from './levelrules.ts';
-import { BASE_GAME_SCRIPTS, CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
+import { baseGame } from './basegame.ts';
+import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
 import type { MappedFile } from './types.ts';
 
@@ -31,13 +32,12 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
         notes.push(`Made for TRX 1.${guess.release} (from ${guess.from}).`);
     }
 
-    const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release);
+    const base = baseGame(files, options.modDir, options.gameVersion);
+    if (base.lostArtifact) notes.push('Made for The Lost Artifact, which it keeps apart from Tomb Raider III.');
+    const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release, base.gameScript);
     notes.push(...scripts.notes);
     notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release));
-    const rules = applyLevelRules(
-        scripts.files, options.modDir, options.gameVersion, guess.release,
-        BASE_GAME_SCRIPTS[options.gameVersion] ?? '',
-    );
+    const rules = applyLevelRules(scripts.files, options.modDir, options.gameVersion, guess.release, base);
     notes.push(...rules.notes);
     const data = await migrateDataFiles(rules.files, options.modDir, options.gameVersion, guess.release);
     notes.push(...data.notes);

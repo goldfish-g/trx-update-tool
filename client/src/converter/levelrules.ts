@@ -16,6 +16,7 @@ import { BASE_FILES } from '../templates/base/index.ts';
 import { parseJSON5 } from './json5.ts';
 import { clearEndLevelParameters, readLevel, type LevelData } from './level.ts';
 import { parseTR2Script } from './tombpc.ts';
+import type { BaseGame } from './basegame.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -94,7 +95,13 @@ function block(raw: string[], start: string[]): string {
     return lines.join('\n');
 }
 
-function tr3Rules(s: Scripts, applies: (removedIn: number, classicOnly?: boolean) => boolean, levels: Map<string, number>, data: Map<string, LevelData>): void {
+function tr3Rules(
+    s: Scripts,
+    applies: (removedIn: number, classicOnly?: boolean) => boolean,
+    levels: Map<string, number>,
+    data: Map<string, LevelData>,
+    lostArtifact: boolean,
+): void {
     const quest = '{ "quest_item_1", "quest_item_2", "quest_item_3", "quest_item_4" }';
 
     // TRX 1.10: artefacts spun and glowed green wherever they lay.
@@ -149,8 +156,8 @@ function tr3Rules(s: Scripts, applies: (removedIn: number, classicOnly?: boolean
 
     for (const [key, num] of levels) {
         // TRX 1.8: picking up an artefact ended the level, except in the
-        // last one.
-        if (applies(8) && num !== 19) {
+        // last one, and in The Lost Artifact the fifth.
+        if (applies(8) && num !== 19 && !(lostArtifact && num === 4)) {
             push(s.level, key,
                 'trx.events.on_pickup(function(item_num)',
                 '  local item = trx.items[item_num]',
@@ -335,7 +342,7 @@ export function applyLevelRules(
     modDir: string,
     gameVersion: number,
     release: number | null,
-    baseGameScript: string,
+    base: BaseGame,
 ): LevelRules {
     const prefix = `games/${modDir}/`;
     const notes: string[] = [];
@@ -399,11 +406,26 @@ export function applyLevelRules(
             'end',
         );
     }
-    if (gameVersion === 3) tr3Rules(s, applies, levels, data);
+    if (gameVersion === 3) tr3Rules(s, applies, levels, data, base.lostArtifact);
     else if (gameVersion === 2) tr2Rules(s, applies);
     else tr1Rules(s, applies);
 
     const out = files.slice();
+
+    // The Lost Artifact's orcas collided underwater, as TRX's dolphin does;
+    // the game's catalog binds the orca's slot to it.
+    if (base.lostArtifact && applies(8)) {
+        const path = prefix + 'catalog_objects.csv';
+        const own = out.find((f) => f.path === path);
+        const text = own ? decoder.decode(own.data) : BASE_FILES['tr3/catalog_objects.csv'] ?? '';
+        const bound = text.replace(/^(\s*\d+\s*,\s*)(O_)?orca\b/gim, '$1dolphin');
+        if (bound !== text) {
+            if (own) own.data = encoder.encode(bound);
+            else out.push({ path, data: encoder.encode(bound) });
+            notes.push('Bound the orca to TRX\'s dolphin, which collides underwater as The Lost Artifact\'s orca did.');
+        }
+    }
+
     const write = (path: string, text: string, base: string) => {
         const existing = out.find((f) => f.path === path);
         if (existing) {
@@ -416,7 +438,7 @@ export function applyLevelRules(
     if (s.game.length > 0 || s.gameStart.length > 0) {
         // A game script of the game's own replaces the shipped one, so a new
         // one starts with the shipped set-up.
-        write(prefix + 'scripts/_game.lua', block(s.game, s.gameStart), baseGameScript.replace(/\n*$/, '\n'));
+        write(prefix + 'scripts/_game.lua', block(s.game, s.gameStart), base.gameScript.replace(/\n*$/, '\n'));
         scripts++;
     }
     for (const key of new Set([...s.level.keys(), ...s.levelStart.keys()])) {

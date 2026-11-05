@@ -1,4 +1,5 @@
 import { unzipSync, gunzipSync } from 'fflate';
+import { GOLD_MARKER } from './basegame.ts';
 import { decodeLzma } from './lzma.ts';
 import type { MappedFile, Language } from './types.ts';
 
@@ -8,7 +9,7 @@ const SFX_EXTS   = ['.sfx'];
 const FMV_EXTS   = ['.mp4', '.rpl', '.ogv', '.avi', '.fmv'];
 const AUDIO_EXTS = ['.wad'];
 const REMASTER_SKIP_EXTS = ['.trg', '.dds', '.trm', '.pdp', '.map', '.tex'];
-const ROOT_MARKERS = ['data', 'fmv', 'music', 'audio', 'cuts', 'tracks', 'sfx'];
+const ROOT_MARKERS = ['data', 'datag', 'fmv', 'music', 'audio', 'cuts', 'tracks', 'sfx'];
 
 const LANG_NAMES: Record<string, string> = {
     de: 'German',   en: 'English',  es: 'Spanish',
@@ -271,8 +272,20 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     return null;
 }
 
+function relativePath(rawPath: string, root: string): string {
+    let relPath = rawPath;
+    if (root && relPath.toLowerCase().indexOf(root.toLowerCase()) === 0) {
+        relPath = relPath.substring(root.length);
+    }
+    return relPath.replace(/\\/g, '/').replace(/^\/+/, '');
+}
+
 function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     const root = detectRoot(entries);
+    // Tomb Raider III Community Edition plays The Lost Artifact from datag/
+    // and pixg/, in place of data/ and pix/. A game laid out that way is the
+    // expansion, and those are its files.
+    const gold = entries.some((e) => /^datag\//i.test(relativePath(e.path, root)));
 
     const mapped: MappedFile[] = [];
     const depths: number[] = [];
@@ -280,12 +293,11 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const rawPath = entries[i].path;
         const data = entries[i].data;
 
-        let relPath = rawPath;
-        if (root && relPath.toLowerCase().indexOf(root.toLowerCase()) === 0) {
-            relPath = relPath.substring(root.length);
+        let relPath = relativePath(rawPath, root);
+        if (gold) {
+            if (/^(data|pix)\//i.test(relPath)) continue;
+            relPath = relPath.replace(/^datag\//i, 'data/').replace(/^pixg\//i, 'pix/');
         }
-
-        relPath = relPath.replace(/\\/g, '/').replace(/^\/+/, '');
         const lowerPath = relPath.toLowerCase();
 
         if (!relPath || data.byteLength === 0) continue;
@@ -304,7 +316,9 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const seen = nearest[mapped[i].path];
         if (seen === undefined || depths[i] < depths[seen]) nearest[mapped[i].path] = i;
     }
-    return mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
+    const out = mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
+    if (gold) out.push({ path: `games/${modId}/${GOLD_MARKER}`, data: new Uint8Array([1]) });
+    return out;
 }
 
 export function stripRemasteredSFXHeader(data: Uint8Array): Uint8Array {
