@@ -18,6 +18,31 @@ const TR3_CATALOG_TRACKS = new Set([
     122,
 ]);
 
+// Lara's home in each game, which the passport offers apart from the levels
+// a new game plays.
+const HOME_LEVELS: Record<string, boolean> = {
+    'gym.phd': true,
+    'assault.tr2': true,
+    'house.tr2': true,
+};
+
+// Injections TRX has renamed since older engines named them.
+const RENAMED_INJECTIONS: Record<string, string> = {
+    'purple_crystal.bin': 'crystal.bin',
+};
+
+// The name TRX knows an injection by: no directory, and its current name.
+function currentInjection(path: string): string {
+    const name = path.split('/').pop()!;
+    return RENAMED_INJECTIONS[name.toLowerCase()] ?? name;
+}
+
+// The file name a script gives, as the archive maps it: lower case, with no
+// directory, whichever slashes the script used.
+function baseName(path: string): string {
+    return path.replace(/\\/g, '/').split('/').pop()!.toLowerCase();
+}
+
 export function setupCustomGameflow(
     mappedFiles: MappedFile[],
     modDir: string,
@@ -57,7 +82,7 @@ export function setupCustomGameflow(
     }
 
     if (hasGameflow && gfEntry) {
-        let gfText = new TextDecoder().decode(gfEntry.data);
+        const gfText = new TextDecoder().decode(gfEntry.data);
 
         if (gfText.indexOf('"PLACEHOLDER"') !== -1) {
             let fullGfData: Uint8Array | null = null;
@@ -163,13 +188,13 @@ export function setupCustomGameflow(
                 || levels[li].type === 'dummy'
                 || levels[li].type === 'current') continue;
             if (!levels[li].lara_outfit) {
-                levels[li].lara_outfit = 'tr2_classic';
+                levels[li].lara_outfit = `tr${gameVersion}_classic`;
                 gfDirty = true;
             }
             if (levels[li].injections) {
                 const inj: string[] = levels[li].injections;
                 for (let ii = 0; ii < inj.length; ii++) {
-                    const stripped = inj[ii].split('/').pop()!;
+                    const stripped = currentInjection(inj[ii]);
                     if (stripped !== inj[ii]) {
                         inj[ii] = stripped;
                         gfDirty = true;
@@ -179,7 +204,7 @@ export function setupCustomGameflow(
         }
         if (gameflow.injections) {
             for (let ii = 0; ii < gameflow.injections.length; ii++) {
-                const stripped = gameflow.injections[ii].split('/').pop()!;
+                const stripped = currentInjection(gameflow.injections[ii]);
                 if (stripped !== gameflow.injections[ii]) {
                     gameflow.injections[ii] = stripped;
                     gfDirty = true;
@@ -213,49 +238,98 @@ export function setupCustomGameflow(
 
     if (scriptEntry && gameVersion >= 2) {
         try {
-            const scriptInfo = parseTR2Script(scriptEntry.data);
+            const scriptInfo = parseTR2Script(scriptEntry.data, gameVersion);
             if (scriptInfo && scriptInfo.filenames.length > 1) {
                 const tplText = getTemplate(templateMod, 'gameflow.json5');
                 const gameflow = parseJSON5(tplText) as AnyObj;
                 const templateLevel = gameflow.levels[0];
 
-                const levelPrefix = modPrefix + 'levels/';
-                let uploadedTitle: string | null = null;
+                // What the archive brought, by the name a script gives it.
+                const uploaded: Record<string, boolean> = {};
                 for (let i = 0; i < result.length; i++) {
-                    if (result[i].path.indexOf(levelPrefix) === 0) {
-                        const bn = result[i].path
-                            .substring(levelPrefix.length)
-                            .replace(/\.[^.]+$/, '').toLowerCase();
-                        if (bn === 'title') {
-                            uploadedTitle = result[i].path
-                                .substring(levelPrefix.length);
-                        }
+                    if (result[i].path.indexOf(modPrefix) === 0) {
+                        uploaded[baseName(result[i].path)] = true;
                     }
                 }
 
-                const scriptTitle = scriptInfo.filenames[0]
-                    .replace(/\\/g, '/').split('/').pop()!
-                    .toLowerCase();
+                // The title level is the first level among the title
+                // screen's files; the rest are its pictures.
+                let titlePath: string | null = null;
+                for (let i = 0; i < scriptInfo.titleFiles.length; i++) {
+                    const base = baseName(scriptInfo.titleFiles[i]);
+                    if (/\.(tr2|phd|tub)$/.test(base)) {
+                        titlePath = base;
+                        break;
+                    }
+                }
+                if (titlePath === null || !uploaded[titlePath]) {
+                    for (const name in uploaded) {
+                        if (/^title\.(tr2|phd|tub)$/.test(name)) titlePath = name;
+                    }
+                }
                 gameflow.title = {
-                    path: uploadedTitle || scriptTitle,
+                    path: titlePath ?? 'title.tr2',
                     music_track: scriptInfo.titleSoundId,
                     sequence: [{ type: 'exit_to_title' }],
                 };
 
+                // Only the FMVs and cutscenes the archive brought can play,
+                // numbered as the gameflow lists them.
+                const fmvIds: Record<number, number> = {};
+                gameflow.fmvs = [];
+                for (let i = 0; i < scriptInfo.fmvFiles.length; i++) {
+                    const base = baseName(scriptInfo.fmvFiles[i]);
+                    if (!uploaded[base]) continue;
+                    fmvIds[i] = gameflow.fmvs.length;
+                    gameflow.fmvs.push({ path: base });
+                }
+                const cutsceneIds: Record<number, number> = {};
+                gameflow.cutscenes = [];
+                for (let i = 0; i < scriptInfo.cutsceneFiles.length; i++) {
+                    const base = baseName(scriptInfo.cutsceneFiles[i]);
+                    if (!uploaded[base]) continue;
+                    cutsceneIds[i] = gameflow.cutscenes.length;
+                    gameflow.cutscenes.push({
+                        path: base,
+                        music_track: scriptInfo.cutsceneTracks[i],
+                        lara_outfit: defaultOutfit,
+                        sequence: [{ type: 'loop_game' }],
+                    });
+                }
+                function renumber(sequence: AnyObj[]): AnyObj[] {
+                    const out: AnyObj[] = [];
+                    for (let i = 0; i < sequence.length; i++) {
+                        const event = sequence[i];
+                        if (event.type === 'play_fmv') {
+                            if (!(event.fmv_id in fmvIds)) continue;
+                            out.push({ ...event, fmv_id: fmvIds[event.fmv_id] });
+                        } else if (event.type === 'play_cutscene') {
+                            if (!(event.cutscene_id in cutsceneIds)) continue;
+                            out.push({ ...event, cutscene_id: cutsceneIds[event.cutscene_id] });
+                        } else {
+                            out.push(event);
+                        }
+                    }
+                    return out;
+                }
+
+                // The script lists every level of the game it was made
+                // from; only the ones the archive brought can play. The
+                // first is Lara's home.
                 gameflow.levels = [];
                 const titleEntries: { title: string }[] = [];
-                for (let i = 1; i < scriptInfo.filenames.length; i++) {
-                    const base = scriptInfo.filenames[i]
-                        .replace(/\\/g, '/').split('/').pop()!
-                        .toLowerCase();
+                for (let i = 0; i < scriptInfo.filenames.length; i++) {
+                    const base = baseName(scriptInfo.filenames[i]);
+                    if (!uploaded[base] || base === titlePath) continue;
                     const entry: AnyObj = JSON.parse(
                         JSON.stringify(templateLevel));
                     entry.path = base;
                     entry.lara_outfit = defaultOutfit;
                     entry.music_track = scriptInfo.musicTracks[i];
                     if (scriptInfo.sequences[i]) {
-                        entry.sequence = scriptInfo.sequences[i];
+                        entry.sequence = renumber(scriptInfo.sequences[i] as AnyObj[]);
                     }
+                    if (i === 0) entry.type = 'gym';
                     gameflow.levels.push(entry);
 
                     const title =
@@ -266,8 +340,16 @@ export function setupCustomGameflow(
                     titleEntries.push({ title: title });
                 }
 
-                if (gameflow.levels.length > 0) {
-                    const firstLvl = gameflow.levels[0];
+                // Lara starts the first level proper, not her home, with
+                // what she carries.
+                let firstLvl: AnyObj | null = null;
+                for (let i = 0; i < gameflow.levels.length; i++) {
+                    if (gameflow.levels[i].type !== 'gym') {
+                        firstLvl = gameflow.levels[i];
+                        break;
+                    }
+                }
+                if (firstLvl) {
                     const seq: AnyObj[] = firstLvl.sequence || [];
                     let hasGiveItem = false;
                     let hasRemoveWeapons = false;
@@ -282,22 +364,22 @@ export function setupCustomGameflow(
                             gameVersion === 3
                                 ? [
                                     { type: 'give_item',
-                                      object_id: 'small_medipack' },
+                                      object_id: 'small_medipack_item' },
                                     { type: 'give_item',
-                                      object_id: 'large_medipack' },
+                                      object_id: 'large_medipack_item' },
                                     { type: 'give_item',
-                                      object_id: 'flare',
+                                      object_id: 'flare_item',
                                       quantity: 2 },
                                 ]
                                 : [
                                     { type: 'give_item',
-                                      object_id: 'shotgun' },
+                                      object_id: 'shotgun_item' },
                                     { type: 'give_item',
-                                      object_id: 'small_medipack' },
+                                      object_id: 'small_medipack_item' },
                                     { type: 'give_item',
-                                      object_id: 'large_medipack' },
+                                      object_id: 'large_medipack_item' },
                                     { type: 'give_item',
-                                      object_id: 'flare',
+                                      object_id: 'flare_item',
                                       quantity: 2 },
                                 ];
                         let loopIdx = -1;
@@ -410,6 +492,9 @@ export function setupCustomGameflow(
         const entry: AnyObj = JSON.parse(JSON.stringify(templateLevel));
         entry.path = filename;
         entry.lara_outfit = defaultOutfit;
+        if (HOME_LEVELS[filename.toLowerCase()]) {
+            entry.type = 'gym';
+        }
         return entry;
     });
 
@@ -520,6 +605,6 @@ function generateStrings(
                 files.push({ path: strPath, data: strData });
             }
         }
-    } catch (_e) { /* ignore */ }
+    } catch { /* ignore */ }
     return files;
 }
