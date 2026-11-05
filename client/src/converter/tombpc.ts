@@ -42,34 +42,70 @@ const GFE_HAS_ARG: Record<number, number> = {
     [GFE.NUM_SECRETS]: 1,
 };
 
+// The objects a script gives by number, under the names TRX knows them by.
+// The TR2 order was checked against the retail script and TRX's gameflow,
+// level by level; TR3 adds the rocket launcher, so its ammo and the rest
+// sit two places further on.
 const TR2_INV_KEYS: string[] = [
-    'pistols',                // 0
-    'autos',                  // 1
-    'uzis',                   // 2
-    'shotgun',                // 3
-    'harpoon_gun',            // 4
-    'm16',                    // 5
-    'grenade_launcher',       // 6
-    'pistols_ammo',           // 7
-    'autos_ammo',             // 8
-    'uzis_ammo',              // 9
-    'shotgun_ammo',           // 10
-    'harpoon_gun_ammo',       // 11
-    'm16_ammo',               // 12
-    'grenade_launcher_ammo',  // 13
-    'flare',                  // 14
-    'small_medipack',         // 15
-    'large_medipack',         // 16
-    'pickup_1',               // 17
-    'pickup_2',               // 18
-    'puzzle_1',               // 19
-    'puzzle_2',               // 20
-    'puzzle_3',               // 21
-    'puzzle_4',               // 22
-    'key_1',                  // 23
-    'key_2',                  // 24
-    'key_3',                  // 25
-    'key_4',                  // 26
+    'pistols_item',           // 0
+    'shotgun_item',           // 1
+    'autos_item',             // 2
+    'uzis_item',              // 3
+    'harpoon_gun_item',       // 4
+    'm16_item',               // 5
+    'grenade_gun_item',       // 6
+    'pistols_ammo_item',      // 7
+    'shotgun_ammo_item',      // 8
+    'autos_ammo_item',        // 9
+    'uzis_ammo_item',         // 10
+    'harpoon_gun_ammo_item',  // 11
+    'm16_ammo_item',          // 12
+    'grenade_ammo_item',      // 13
+    'flare_item',             // 14
+    'small_medipack_item',    // 15
+    'large_medipack_item',    // 16
+    'pickup_item_1',          // 17
+    'pickup_item_2',          // 18
+    'puzzle_item_1',          // 19
+    'puzzle_item_2',          // 20
+    'puzzle_item_3',          // 21
+    'puzzle_item_4',          // 22
+    'key_item_1',             // 23
+    'key_item_2',             // 24
+    'key_item_3',             // 25
+    'key_item_4',             // 26
+];
+
+const TR3_INV_KEYS: string[] = [
+    'pistols_item',           // 0
+    'shotgun_item',           // 1
+    'autos_item',             // 2, the Desert Eagle
+    'uzis_item',              // 3
+    'harpoon_gun_item',       // 4
+    'm16_item',               // 5, the MP5
+    'rocket_gun_item',        // 6
+    'grenade_gun_item',       // 7
+    'pistols_ammo_item',      // 8
+    'shotgun_ammo_item',      // 9
+    'autos_ammo_item',        // 10
+    'uzis_ammo_item',         // 11
+    'harpoon_gun_ammo_item',  // 12
+    'm16_ammo_item',          // 13
+    'rocket_ammo_item',       // 14
+    'grenade_ammo_item',      // 15
+    'flare_item',             // 16
+    'small_medipack_item',    // 17
+    'large_medipack_item',    // 18
+    'pickup_item_1',          // 19
+    'pickup_item_2',          // 20
+    'puzzle_item_1',          // 21
+    'puzzle_item_2',          // 22
+    'puzzle_item_3',          // 23
+    'puzzle_item_4',          // 24
+    'key_item_1',             // 25
+    'key_item_2',             // 26
+    'key_item_3',             // 27
+    'key_item_4',             // 28
 ];
 
 interface Opcode {
@@ -82,7 +118,8 @@ interface TranslatedSequence {
     music_track: number;
 }
 
-export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
+export function parseTR2Script(rawData: Uint8Array, gameVersion: number): ScriptInfo | null {
+    const invKeys = gameVersion === 3 ? TR3_INV_KEYS : TR2_INV_KEYS;
     try {
         const data = new Uint8Array(rawData);
         const view = new DataView(data.buffer);
@@ -93,6 +130,9 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
         const optStart = 262;
 
         const numLevels = view.getUint16(optStart + 64, true);
+        const numPictures = view.getUint16(optStart + 66, true);
+        const numTitles = view.getUint16(optStart + 68, true);
+        const numFMVs = view.getUint16(optStart + 70, true);
         const numCutscenes = view.getUint16(optStart + 72, true);
         const titleSoundId = view.getUint16(optStart + 76, true);
         const cypher = data[optStart + 120];
@@ -119,60 +159,17 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
             return { strings: strings, end: pos + dlen };
         }
 
-        let pos = optStart + optSize;
-        const titleBlock = readBlock(pos, numLevels);
+        // The string tables follow in a fixed order: level names, pictures,
+        // titles, FMVs, level files and cutscenes.
+        const titleBlock = readBlock(optStart + optSize, numLevels);
         const levelTitles = titleBlock.strings;
-
-        let filenames: string[] | null = null;
-        let fnEndPos = 0;
-        for (let sp = titleBlock.end;
-             sp < data.length - numLevels * 2 - 4; sp++) {
-            const first = view.getUint16(sp, true);
-            if (first !== 0) continue;
-            let ok = true;
-            for (let k = 1; k < numLevels; k++) {
-                if (view.getUint16(sp + k * 2, true)
-                    <= view.getUint16(sp + (k - 1) * 2, true)) {
-                    ok = false; break;
-                }
-            }
-            if (!ok) continue;
-            try {
-                const blk = readBlock(sp, numLevels);
-                let allValid = true;
-                for (let k = 0; k < blk.strings.length; k++) {
-                    const s = blk.strings[k];
-                    const sl = s.toLowerCase();
-                    if (sl.indexOf('.tr2') < 0
-                        && sl.indexOf('.phd') < 0
-                        && sl.indexOf('.tub') < 0
-                        && sl.indexOf('.psx') < 0) {
-                        allValid = false; break;
-                    }
-                    for (let c = 0; c < s.length; c++) {
-                        const cc = s.charCodeAt(c);
-                        if (cc < 32 || cc > 126) {
-                            allValid = false; break;
-                        }
-                    }
-                    if (!allValid) break;
-                }
-                if (allValid) {
-                    filenames = blk.strings;
-                    fnEndPos = blk.end;
-                    break;
-                }
-            } catch (_e) { /* ignore */ }
-        }
-        if (!filenames) return null;
-
-        let scriptPos = fnEndPos;
-        if (numCutscenes > 0) {
-            try {
-                const cutBlk = readBlock(scriptPos, numCutscenes);
-                scriptPos = cutBlk.end;
-            } catch (_e) { /* ignore */ }
-        }
+        const pictureBlock = readBlock(titleBlock.end, numPictures);
+        const titlesBlock = readBlock(pictureBlock.end, numTitles);
+        const fmvBlock = readBlock(titlesBlock.end, numFMVs);
+        const fileBlock = readBlock(fmvBlock.end, numLevels);
+        const cutsceneBlock = readBlock(fileBlock.end, numCutscenes);
+        const filenames = fileBlock.strings;
+        let scriptPos = cutsceneBlock.end;
 
         const scriptOffsets: number[] = [];
         for (let i = 0; i <= numLevels; i++) {
@@ -203,10 +200,14 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
             return ops;
         }
 
+        const cutsceneTracks: number[] = [];
+        for (let i = 0; i < numCutscenes; i++) cutsceneTracks.push(-1);
+
         function translateSequence(ops: Opcode[]): TranslatedSequence {
             const pre: Record<string, unknown>[] = [];
             const post: Record<string, unknown>[] = [];
             let musicTrack = -1;
+            let lastTrack = -1;
             let seenLevel = false;
             let isGameComplete = false;
 
@@ -217,7 +218,10 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
 
                 switch (op) {
                 case GFE.SET_TRACK:
-                    musicTrack = arg;
+                    // A track set after the level starts belongs to what
+                    // follows it, such as a cutscene, not to the level.
+                    if (!seenLevel) musicTrack = arg;
+                    lastTrack = arg;
                     break;
 
                 case GFE.START_LEVEL:
@@ -230,6 +234,7 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
 
                 case GFE.CUTSCENE:
                     target.push({ type: 'play_cutscene', cutscene_id: arg });
+                    if (arg >= 0 && arg < numCutscenes) cutsceneTracks[arg] = lastTrack;
                     break;
 
                 case GFE.LEVEL_COMPLETE:
@@ -267,7 +272,7 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
                     if (arg >= 0) {
                         const itemIdx = arg >= 1000 ? arg - 1000 : arg;
                         const invType = arg >= 1000 ? 'give_item' : 'add_secret_reward';
-                        const objKey = TR2_INV_KEYS[itemIdx];
+                        const objKey = invKeys[itemIdx];
                         if (objKey) {
                             target.push({ type: invType, object_id: objKey });
                         }
@@ -340,8 +345,12 @@ export function parseTR2Script(rawData: Uint8Array): ScriptInfo | null {
             sequences: sequences,
             titleSoundId: titleSoundId,
             cdOffset: cdOffset,
+            titleFiles: titlesBlock.strings,
+            fmvFiles: fmvBlock.strings,
+            cutsceneFiles: cutsceneBlock.strings,
+            cutsceneTracks: cutsceneTracks,
         };
-    } catch (_e) {
+    } catch {
         return null;
     }
 }

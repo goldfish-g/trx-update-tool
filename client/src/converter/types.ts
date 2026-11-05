@@ -30,4 +30,10 @@ export type ScriptInfo = {
     sequences: (Record<string, unknown>[] | null)[];
     titleSoundId: number;
     cdOffset: number;
+    // The title screen's files: its level, then its pictures.
+    titleFiles: string[];
+    fmvFiles: string[];
+    cutsceneFiles: string[];
+    // The music each cutscene plays, from the track set just before it.
+    cutsceneTracks: number[];
 };
