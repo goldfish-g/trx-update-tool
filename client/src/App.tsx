@@ -142,7 +142,11 @@ function App() {
 
     setState({ step: 'converting', message: 'Updating scripts...', progress: 0.75 });
 
-    const { files: finalFiles, notes } = migrateToCurrentTRX(gameflowFiles);
+    const { files: finalFiles, notes } = migrateToCurrentTRX(gameflowFiles, {
+      modDir: modId,
+      gameVersion: +version,
+      upload: filteredEntries,
+    });
 
     setState({ step: 'converting', message: 'Creating ZIP...', progress: 0.8 });
 

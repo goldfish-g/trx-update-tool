@@ -79,7 +79,7 @@ The service runs on port `3001` (configurable via `PORT` env var).
 
 ## Keeping up with TRX
 
-The converter writes for the TRX it was last updated against, so two parts
+The converter writes for the TRX it was last updated against, so these parts
 follow TRX's own files:
 
 - `client/src/templates/tr*-level/` mirror TRX's
@@ -91,6 +91,20 @@ follow TRX's own files:
   ```bash
   node scripts/extract-renames.mjs ../TRX
   ```
+- `client/src/converter/lua/base/` holds the game scripts TRX ships for TR1-3.
+  A converted game that brings a game script of its own runs both, so the
+  shipped set-up (the interface, water colors, save crystals) still happens.
+  Copy them again from a TRX checkout:
+
+  ```bash
+  node scripts/copy-game-scripts.mjs ../TRX
+  ```
+- `client/src/converter/lua/trx_compat.lua` lets a script written for an older
+  TRX run on the current one. The converter tells which TRX a game was made
+  for from the version its executable states, or else from what its scripts
+  and game flow use, and starts each of its scripts with a line handing it the
+  API of that release. When TRX changes its Lua API, add the change there,
+  gated on the release that made it, as `docs/trx/MIGRATING.md` describes it.
 
 ## API
 

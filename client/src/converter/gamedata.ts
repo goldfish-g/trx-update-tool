@@ -206,6 +206,13 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
         return prefix + laidOut[1];
     }
 
+    // Lua outside a game directory is either the engine's own or, before
+    // TRX 1.10, a module a script required by its path. Which one depends on
+    // the TRX the game was made for, so the scripts step decides.
+    if (ext === '.lua') {
+        return prefix + '_loose/' + lowerPath;
+    }
+
     if (hasExt(ext, LEVEL_EXTS)) {
         const inCutsDir = lowerPath.indexOf('cuts/') === 0;
         if (inCutsDir) {
