@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import type { MappedFile, Language, GameVersion } from './converter/types.ts';
 import { extractArchive, processFiles, filterByLanguage } from './converter/gamedata.ts';
 import { setupCustomGameflow } from './converter/gameflow.ts';
+import { migrateToCurrentTRX } from './converter/migrate.ts';
 import { createOutputZip } from './converter/zip.ts';
 import { Header } from './components/Header.tsx';
 import { UploadZone } from './components/UploadZone.tsx';
@@ -15,7 +16,7 @@ type AppState =
   | { step: 'options'; entries: MappedFile[]; languages: Language[] }
   | { step: 'converting'; message: string; progress: number }
   | { step: 'uploading'; message: string; progress: number }
-  | { step: 'done'; downloadUrl: string; expiresAt: string }
+  | { step: 'done'; downloadUrl: string; expiresAt: string; notes: string[] }
   | { step: 'error'; message: string };
 
 function slugify(text: string): string {
@@ -137,7 +138,11 @@ function App() {
 
     setState({ step: 'converting', message: 'Generating gameflow...', progress: 0.65 });
 
-    const finalFiles = setupCustomGameflow(mapped, modId, +version, outfitImport, title);
+    const gameflowFiles = setupCustomGameflow(mapped, modId, +version, outfitImport, title);
+
+    setState({ step: 'converting', message: 'Updating scripts...', progress: 0.75 });
+
+    const { files: finalFiles, notes } = migrateToCurrentTRX(gameflowFiles);
 
     setState({ step: 'converting', message: 'Creating ZIP...', progress: 0.8 });
 
@@ -155,7 +160,7 @@ function App() {
 
     const { downloadUrl, expiresAt } = await res.json();
 
-    setState({ step: 'done', downloadUrl, expiresAt });
+    setState({ step: 'done', downloadUrl, expiresAt, notes });
   }
 
   const handleReset = useCallback(() => {
@@ -254,6 +259,7 @@ function App() {
           <Result
             downloadUrl={state.downloadUrl}
             expiresAt={state.expiresAt}
+            notes={state.notes}
             onReset={handleReset}
           />
         )}

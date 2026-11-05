@@ -3,10 +3,12 @@ import { useState, useEffect } from 'react';
 type Props = {
   downloadUrl: string;
   expiresAt: string;
+  // What the update to the current TRX changed, and what it left to port by hand.
+  notes: string[];
   onReset: () => void;
 };
 
-export function Result({ downloadUrl, expiresAt, onReset }: Props) {
+export function Result({ downloadUrl, expiresAt, notes, onReset }: Props) {
   const [timeLeft, setTimeLeft] = useState('');
   const [copied, setCopied] = useState(false);
 
@@ -87,6 +89,17 @@ export function Result({ downloadUrl, expiresAt, onReset }: Props) {
             {copied ? 'Copied!' : 'Copy'}
           </button>
         </div>
+
+        {notes.length > 0 && (
+          <div className="w-full text-left">
+            <h3 className="font-semibold mb-2">Updated for the current TRX</h3>
+            <ul className="list-disc list-inside text-sm text-base-content/70 space-y-1">
+              {notes.map((note) => (
+                <li key={note}>{note}</li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="divider"></div>
 

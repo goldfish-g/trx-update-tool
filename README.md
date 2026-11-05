@@ -20,6 +20,8 @@ Upload a ZIP of your custom level data, and the converter will produce a ready-t
 - Handles TR2X/TR1X extended gameflows (filters to uploaded levels, cleans injection paths)
 - Optionally injects a `level_default` outfit so custom levels can use their embedded Lara model
 - Detects multi-language audio (remastered releases) and lets you pick one
+- Reads ZIP archives whose entries 7-Zip compressed with LZMA
+- Brings levels made for an older TRX up to date with the renames in TRX's migration guide, and lists what still needs porting by hand
 
 ## Tech stack
 
@@ -74,6 +76,21 @@ The service runs on port `3001` (configurable via `PORT` env var).
         ├── storage.ts        UUID-based temp file storage
         └── cleanup.ts        Periodic expiry cleanup (every 10 min)
 ```
+
+## Keeping up with TRX
+
+The converter writes for the TRX it was last updated against, so two parts
+follow TRX's own files:
+
+- `client/src/templates/tr*-level/` mirror TRX's
+  `data/trx/ship/games/tr*-level/` game flows. Keep their injection lists in
+  step when TRX changes them.
+- `client/src/converter/renames.generated.ts` holds the renames from TRX's
+  `docs/trx/MIGRATING.md`. Regenerate it from a TRX checkout:
+
+  ```bash
+  node scripts/extract-renames.mjs ../TRX
+  ```
 
 ## API
 
