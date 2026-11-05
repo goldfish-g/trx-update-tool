@@ -66,3 +66,13 @@ export function luaObjectRenames(gameVersion: number): string {
         .map((k) => `[${JSON.stringify(k)}] = ${JSON.stringify(renames[k])},`)
         .join(' ') + ` older = { ${older.join(' ')} },`;
 }
+
+/**
+ * The picture TRX's own games show behind the final statistics, from the
+ * game the converted one extends.
+ */
+export const STATS_BACKGROUND: Record<number, string> = {
+    1: 'install.webp',
+    2: 'end.webp',
+    3: 'theend2.webp',
+};

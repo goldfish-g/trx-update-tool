@@ -11,7 +11,7 @@ import { BASE_FILES, BASE_INJECTIONS } from '../templates/base/index.ts';
 import { GAME_STRING_IDS, STOCK_BLOBS } from './history.generated.ts';
 import { parseJSON5 } from './json5.ts';
 import { CURRENT_RELEASE, currentMarkup } from './lua.ts';
-import { currentObjectKey } from './objects.ts';
+import { currentObjectKey, STATS_BACKGROUND } from './objects.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -144,6 +144,20 @@ function migrateGameflow(
         }
     };
     walkObjects(gameflow);
+
+    // The final statistics stand on the picture of the game this one extends,
+    // as in TRX's own games.
+    const walkStats = (node: unknown): void => {
+        if (Array.isArray(node)) {
+            node.forEach(walkStats);
+        } else if (isObject(node)) {
+            if (node.type === 'total_stats' && !node.background_path && STATS_BACKGROUND[gameVersion]) {
+                node.background_path = STATS_BACKGROUND[gameVersion];
+            }
+            Object.values(node).forEach(walkStats);
+        }
+    };
+    walkStats(gameflow);
 
     const entries: AnyObj[] = [
         ...(Array.isArray(gameflow.levels) ? gameflow.levels : []),

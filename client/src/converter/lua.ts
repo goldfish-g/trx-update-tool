@@ -17,7 +17,7 @@ import type { MappedFile } from './types.ts';
 /** The TRX 1.x release the converter writes for. */
 export const CURRENT_RELEASE = 12;
 
-const BASE_GAME_SCRIPTS: Record<number, string> = {
+export const BASE_GAME_SCRIPTS: Record<number, string> = {
     1: tr1GameScript,
     2: tr2GameScript,
     3: tr3GameScript,

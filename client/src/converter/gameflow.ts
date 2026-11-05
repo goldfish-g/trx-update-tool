@@ -410,6 +410,22 @@ function buildGameflow(
                     }
                 }
 
+                // The original engines gave Lara her pistols back on the
+                // level after one that took her weapons; TRX's own game
+                // flows say so for the Diving Area and Area 51.
+                const levelList: AnyObj[] = gameflow.levels;
+                for (let i = 1; i < levelList.length; i++) {
+                    const before: AnyObj[] = levelList[i - 1].sequence || [];
+                    if (!before.some((e) => e.type === 'remove_weapons')) continue;
+                    const seq: AnyObj[] = levelList[i].sequence || [];
+                    if (seq.some((e) => e.type === 'give_item' && e.object_id === 'pistols_item')) continue;
+                    const pistols = { type: 'give_item', object_id: 'pistols_item', quantity: 1 };
+                    const loopIdx = seq.findIndex((e) => e.type === 'loop_game');
+                    if (loopIdx >= 0) seq.splice(loopIdx, 0, pistols);
+                    else seq.unshift(pistols);
+                    levelList[i].sequence = seq;
+                }
+
                 gameflow.engine = gameVersion;
                 gameflow.extends = extendsBase;
                 if (modTitle) {

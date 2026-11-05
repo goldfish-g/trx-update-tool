@@ -6,7 +6,8 @@
 // (datafiles.ts).
 
 import { migrateDataFiles } from './datafiles.ts';
-import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
+import { applyLevelRules } from './levelrules.ts';
+import { BASE_GAME_SCRIPTS, CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
 import type { MappedFile } from './types.ts';
 
@@ -33,7 +34,12 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release);
     notes.push(...scripts.notes);
     notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release));
-    const data = await migrateDataFiles(scripts.files, options.modDir, options.gameVersion, guess.release);
+    const rules = applyLevelRules(
+        scripts.files, options.modDir, options.gameVersion, guess.release,
+        BASE_GAME_SCRIPTS[options.gameVersion] ?? '',
+    );
+    notes.push(...rules.notes);
+    const data = await migrateDataFiles(rules.files, options.modDir, options.gameVersion, guess.release);
     notes.push(...data.notes);
 
     // Working files of the converter's own.

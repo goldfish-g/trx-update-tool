@@ -1,3 +1,4 @@
+import { STATS_BACKGROUND } from './objects.ts';
 import type { ScriptInfo } from './types.ts';
 
 const GFE = {
@@ -245,7 +246,7 @@ export function parseTR2Script(rawData: Uint8Array, gameVersion: number): Script
 
                 case GFE.GAME_COMPLETE:
                     isGameComplete = true;
-                    post.push({ type: 'total_stats' });
+                    post.push({ type: 'total_stats', background_path: STATS_BACKGROUND[gameVersion] });
                     break;
 
                 case GFE.SUNSET:

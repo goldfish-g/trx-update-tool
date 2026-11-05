@@ -121,6 +121,14 @@ follow TRX's own files:
   API of that release. When TRX changes its Lua API, add the change there,
   gated on the release that made it, as `docs/trx/MIGRATING.md` describes it.
 
+- `client/src/converter/levelrules.ts` writes into a game's scripts what the
+  original engines did by themselves: tomb2.exe and tomb3.exe decided some
+  behaviour by the level's place in the script or by a trigger's timer, which
+  TRX has moved into the scripts and data of the original levels. A game built
+  from the original data gets every rule, and a TRX game the ones its release
+  still had. When TRX moves another such rule out of the engine, add it there
+  with the release that moved it.
+
 ## API
 
 | Endpoint | Description |
