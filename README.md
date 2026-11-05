@@ -91,16 +91,28 @@ follow TRX's own files:
   ```bash
   node scripts/extract-renames.mjs ../TRX
   ```
-- `client/src/converter/lua/base/` holds the game scripts TRX ships for TR1-3,
-  and `client/src/templates/cfg/outfits.json5` its outfits.
-  A converted game that brings a game script of its own runs both, so the
-  shipped set-up (the interface, water colors, save crystals) still happens.
-  A game's outfits file replaces the shipped one, so the outfit made of a
-  level's own meshes is written beside the shipped ones as they stand. Copy
-  them again from a TRX checkout:
+- Some of TRX's files are copied in as they stand, from a TRX checkout:
+  - `client/src/converter/lua/base/`: the game scripts of TR1-3. A converted
+    game that brings a game script of its own runs both, so the shipped set-up
+    (the interface, water colors, save crystals) still happens.
+  - `client/src/templates/cfg/outfits.json5`: the outfits. A game's outfits
+    file replaces the shipped one, so the outfit made of a level's own meshes
+    is written beside the shipped ones.
+  - `client/src/templates/base/`: the catalogs, weapons and inventory ring of
+    TR1-3, and the names of their injections. A game's own copy of one of
+    these is merged into TRX's current one, so it keeps what TRX has added.
 
   ```bash
   node scripts/copy-trx-files.mjs ../TRX
+  ```
+- `client/src/converter/history.generated.ts` comes from TRX's git history:
+  the git blob ids of every injection, catalog, weapons and ring file TRX has
+  shipped, so an unchanged copy in a game can be told from one its builder
+  changed, and the string ids of TRX 1.3 with the paths that hold their text
+  now. Regenerate it from a TRX checkout with its tags:
+
+  ```bash
+  node scripts/extract-history.mjs ../TRX
   ```
 - `client/src/converter/lua/trx_compat.lua` lets a script written for an older
   TRX run on the current one. The converter tells which TRX a game was made

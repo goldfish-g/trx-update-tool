@@ -11,7 +11,7 @@ import tr1GameScript from './lua/base/tr1_game.lua?raw';
 import tr2GameScript from './lua/base/tr2_game.lua?raw';
 import tr3GameScript from './lua/base/tr3_game.lua?raw';
 import { parseJSON5 } from './json5.ts';
-import { OBJECT_KEYS, OBJECT_SYMBOLS } from './renames.generated.ts';
+import { luaObjectRenames } from './objects.ts';
 import type { MappedFile } from './types.ts';
 
 /** The TRX 1.x release the converter writes for. */
@@ -338,16 +338,11 @@ function luaString(text: string): string {
     return JSON.stringify(text);
 }
 
-function compatModule(moduleRenames: Record<string, string>): string {
-    const objectRenames: Record<string, string> = {};
-    for (const was in OBJECT_KEYS) objectRenames[was] = OBJECT_KEYS[was];
-    for (const was in OBJECT_SYMBOLS) {
-        objectRenames[was.replace(/^O_/, '').toLowerCase()] = OBJECT_SYMBOLS[was].replace(/^O_/, '').toLowerCase();
-    }
+function compatModule(moduleRenames: Record<string, string>, gameVersion: number): string {
     const table = (entries: Record<string, string>) =>
         Object.keys(entries).sort().map((k) => `[${luaString(k)}] = ${luaString(entries[k])},`).join(' ');
     return compatTemplate
-        .replace('--[[OBJECT_RENAMES]]', table(objectRenames))
+        .replace('--[[OBJECT_RENAMES]]', luaObjectRenames(gameVersion))
         .replace('--[[MODULE_RENAMES]]', table(moduleRenames));
 }
 
@@ -527,7 +522,7 @@ export function migrateScripts(
 
     if (opened > 0) {
         const compatPath = prefix + 'modules/trx_compat.lua';
-        byPath.set(compatPath, { path: compatPath, data: encoder.encode(compatModule(moduleRenames)) });
+        byPath.set(compatPath, { path: compatPath, data: encoder.encode(compatModule(moduleRenames, gameVersion)) });
         notes.push(
             `Its scripts were written for TRX 1.${effective}, and now reach that API through a compatibility module.`,
         );

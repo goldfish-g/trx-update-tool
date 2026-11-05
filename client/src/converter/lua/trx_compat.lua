@@ -19,7 +19,8 @@ local engine_require = require
 local GAME_DIR = engine.mod.current.name
 
 -- Filled in by the converter.
--- Object keys TRX 1.11 renamed, old key to new.
+-- Object keys TRX 1.11 renamed, old key to new; `older` lists the renames of
+-- earlier releases for this game as { release, old key, new key }.
 local OBJECT_RENAMES = { --[[OBJECT_RENAMES]] }
 -- The scripts a game required by their file name before TRX 1.10, which the
 -- converter moved into the game's modules directory: old name to the new
@@ -519,19 +520,19 @@ local function build(from)
     if older(2) then
       lower = lower:gsub("^o_", "")
     end
-    if older(11) then
-      -- The two renames the guide gives in its text rather than its tables.
-      if GAME == 1 and (lower == "boat" or lower == "motor_boat") then
-        return "moored_boat"
-      elseif lower == "waterfall" then
-        return "waterfall_mist"
+    for _, rename in ipairs(OBJECT_RENAMES.older or {}) do
+      if older(rename[1]) and lower == rename[2] then
+        lower = rename[3]
       end
+    end
+    if older(11) then
       lower = OBJECT_RENAMES[lower] or lower
     end
     return lower
   end
 
   if older(11) then
+    -- Every rename the table holds is older than 1.11.
     for _, path in ipairs({ "trx.catalog.objects", "trx.objects" }) do
       local hooks = hooks_for(path)
       hooks.index = function(value, key)

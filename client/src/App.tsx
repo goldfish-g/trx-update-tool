@@ -142,7 +142,7 @@ function App() {
 
     setState({ step: 'converting', message: 'Updating scripts...', progress: 0.75 });
 
-    const { files: finalFiles, notes } = migrateToCurrentTRX(gameflowFiles, {
+    const { files: finalFiles, notes } = await migrateToCurrentTRX(gameflowFiles, {
       modDir: modId,
       gameVersion: +version,
       upload: filteredEntries,
