@@ -1,4 +1,5 @@
 import { unzipSync, gunzipSync } from 'fflate';
+import { decodeLzma } from './lzma.ts';
 import type { MappedFile, Language } from './types.ts';
 
 const LEVEL_EXTS = ['.phd', '.tr2', '.psx', '.tub'];
@@ -27,14 +28,85 @@ function hasExt(ext: string, list: string[]): boolean {
     return false;
 }
 
+const ZIP_METHOD_LZMA = 14;
+
+// Reads the entries fflate cannot inflate, compressed with LZMA as 7-Zip
+// writes them, straight from the central directory.
+function extractLzmaEntries(data: Uint8Array, names: Set<string>): MappedFile[] {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let end = -1;
+    for (let i = data.length - 22; i >= Math.max(0, data.length - 22 - 0xffff); i--) {
+        if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+    }
+    if (end < 0) throw new Error('The zip archive is damaged: its directory is missing.');
+
+    let count = view.getUint16(end + 10, true);
+    let at = view.getUint32(end + 16, true);
+    const locator = end - 20;
+    if (locator >= 0 && view.getUint32(locator, true) === 0x07064b50) {
+        const zip64 = Number(view.getBigUint64(locator + 8, true));
+        count = Number(view.getBigUint64(zip64 + 32, true));
+        at = Number(view.getBigUint64(zip64 + 48, true));
+    }
+
+    const decoder = new TextDecoder();
+    const entries: MappedFile[] = [];
+    for (let i = 0; i < count; i++) {
+        let compressedSize = view.getUint32(at + 20, true);
+        let size = view.getUint32(at + 24, true);
+        const nameLength = view.getUint16(at + 28, true);
+        const extraLength = view.getUint16(at + 30, true);
+        const commentLength = view.getUint16(at + 32, true);
+        let localOffset = view.getUint32(at + 42, true);
+        const name = decoder.decode(data.subarray(at + 46, at + 46 + nameLength));
+
+        // Sizes and offsets past 4 GB live in the ZIP64 extra field.
+        let extra = at + 46 + nameLength;
+        const extraEnd = extra + extraLength;
+        while (extra + 4 <= extraEnd) {
+            const id = view.getUint16(extra, true);
+            let field = extra + 4;
+            if (id === 0x0001) {
+                if (size === 0xffffffff) { size = Number(view.getBigUint64(field, true)); field += 8; }
+                if (compressedSize === 0xffffffff) { compressedSize = Number(view.getBigUint64(field, true)); field += 8; }
+                if (localOffset === 0xffffffff) { localOffset = Number(view.getBigUint64(field, true)); }
+            }
+            extra += 4 + view.getUint16(extra + 2, true);
+        }
+        at = extraEnd + commentLength;
+        if (!names.has(name)) continue;
+
+        // A version, the length of the properties, the properties, then the stream.
+        const start = localOffset + 30 + view.getUint16(localOffset + 26, true) + view.getUint16(localOffset + 28, true);
+        const propsSize = view.getUint16(start + 2, true);
+        const props = data.subarray(start + 4, start + 4 + propsSize);
+        const stream = data.subarray(start, start + compressedSize);
+        entries.push({ path: name, data: decodeLzma(props, stream, 4 + propsSize, size) });
+    }
+    return entries;
+}
+
 function extractZip(data: Uint8Array): MappedFile[] {
     const entries: MappedFile[] = [];
-    const decompressed = unzipSync(data);
+    const lzmaNames = new Set<string>();
+    const decompressed = unzipSync(data, {
+        filter: (file) => {
+            if (file.compression !== ZIP_METHOD_LZMA) return true;
+            lzmaNames.add(file.name);
+            return false;
+        },
+    });
     const keys = Object.keys(decompressed);
     for (let i = 0; i < keys.length; i++) {
         const path = keys[i];
         if (path.endsWith('/')) continue;
         entries.push({ path: path, data: decompressed[path] });
+    }
+    if (lzmaNames.size > 0) {
+        const lzmaEntries = extractLzmaEntries(data, lzmaNames);
+        for (let i = 0; i < lzmaEntries.length; i++) {
+            if (!lzmaEntries[i].path.endsWith('/')) entries.push(lzmaEntries[i]);
+        }
     }
     return entries;
 }
@@ -127,6 +199,13 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
         return null;
     }
 
+    // A package already laid out for TRX keeps its tree: its gameflow,
+    // strings, catalogs, scripts, images and injections.
+    const laidOut = /^games\/[^/]+\/(.+)$/.exec(lowerPath);
+    if (laidOut) {
+        return prefix + laidOut[1];
+    }
+
     if (hasExt(ext, LEVEL_EXTS)) {
         const inCutsDir = lowerPath.indexOf('cuts/') === 0;
         if (inCutsDir) {
@@ -184,6 +263,7 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     const root = detectRoot(entries);
 
     const mapped: MappedFile[] = [];
+    const depths: number[] = [];
     for (let i = 0; i < entries.length; i++) {
         const rawPath = entries[i].path;
         const data = entries[i].data;
@@ -201,10 +281,18 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const vfsPath = classifyFile(lowerPath, relPath, modId);
         if (vfsPath) {
             mapped.push({ path: vfsPath, data: data });
+            depths.push(relPath.split('/').length);
         }
     }
 
-    return mapped;
+    // Files that land on the same path, such as a script and its copies in
+    // language folders, leave the one nearest the top.
+    const nearest: Record<string, number> = {};
+    for (let i = 0; i < mapped.length; i++) {
+        const seen = nearest[mapped[i].path];
+        if (seen === undefined || depths[i] < depths[seen]) nearest[mapped[i].path] = i;
+    }
+    return mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
 }
 
 export function stripRemasteredSFXHeader(data: Uint8Array): Uint8Array {
