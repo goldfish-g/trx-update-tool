@@ -246,6 +246,11 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
         && /^cfg\/tr\d\//.test(lowerPath)) {
         return prefix + '_meta/fullgameflow.json5';
     }
+    // The outfits the engine the game shipped with read, which its levels may
+    // have been built against.
+    if (lowerPath === 'cfg/outfits.json5') {
+        return prefix + '_meta/outfits.json5';
+    }
 
     if (ext === '.bin') {
         if (lowerPath.indexOf('injections/') !== -1) {

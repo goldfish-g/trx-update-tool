@@ -25,14 +25,6 @@ import tr3StringsPlRaw from './tr3-level/strings-pl.json5?raw';
 
 // Cfg files
 import cfgOutfitsRaw from './cfg/outfits.json5?raw';
-import cfgBaseStringsRaw from './cfg/base_strings.json5?raw';
-import cfgBaseStringsDeRaw from './cfg/base_strings-de.json5?raw';
-import cfgBaseStringsEnGbRaw from './cfg/base_strings-en-gb.json5?raw';
-import cfgBaseStringsFrRaw from './cfg/base_strings-fr.json5?raw';
-import cfgBaseStringsGdRaw from './cfg/base_strings-gd.json5?raw';
-import cfgBaseStringsItRaw from './cfg/base_strings-it.json5?raw';
-import cfgBaseStringsPlRaw from './cfg/base_strings-pl.json5?raw';
-import cfgBaseStringsRuRaw from './cfg/base_strings-ru.json5?raw';
 
 const templateMods: Record<string, Record<string, string>> = {
   'tr1-level': {
@@ -64,14 +56,6 @@ const templateMods: Record<string, Record<string, string>> = {
 
 const cfgFiles: Record<string, string> = {
   'outfits.json5': cfgOutfitsRaw,
-  'base_strings.json5': cfgBaseStringsRaw,
-  'base_strings-de.json5': cfgBaseStringsDeRaw,
-  'base_strings-en-gb.json5': cfgBaseStringsEnGbRaw,
-  'base_strings-fr.json5': cfgBaseStringsFrRaw,
-  'base_strings-gd.json5': cfgBaseStringsGdRaw,
-  'base_strings-it.json5': cfgBaseStringsItRaw,
-  'base_strings-pl.json5': cfgBaseStringsPlRaw,
-  'base_strings-ru.json5': cfgBaseStringsRuRaw,
 };
 
 export function getTemplate(templateMod: string, filename: string): string {

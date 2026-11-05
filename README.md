@@ -91,13 +91,16 @@ follow TRX's own files:
   ```bash
   node scripts/extract-renames.mjs ../TRX
   ```
-- `client/src/converter/lua/base/` holds the game scripts TRX ships for TR1-3.
+- `client/src/converter/lua/base/` holds the game scripts TRX ships for TR1-3,
+  and `client/src/templates/cfg/outfits.json5` its outfits.
   A converted game that brings a game script of its own runs both, so the
   shipped set-up (the interface, water colors, save crystals) still happens.
-  Copy them again from a TRX checkout:
+  A game's outfits file replaces the shipped one, so the outfit made of a
+  level's own meshes is written beside the shipped ones as they stand. Copy
+  them again from a TRX checkout:
 
   ```bash
-  node scripts/copy-game-scripts.mjs ../TRX
+  node scripts/copy-trx-files.mjs ../TRX
   ```
 - `client/src/converter/lua/trx_compat.lua` lets a script written for an older
   TRX run on the current one. The converter tells which TRX a game was made

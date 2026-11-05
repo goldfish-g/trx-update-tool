@@ -1,7 +1,7 @@
 import type { MappedFile } from './types.ts';
 import { parseJSON5 } from './json5.ts';
 import { parseTR2Script } from './tombpc.ts';
-import { getTemplate, getTemplateFiles, getCfgFile, getCfgFiles } from '../templates/index.ts';
+import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -49,6 +49,18 @@ export function setupCustomGameflow(
     gameVersion: number,
     useOutfitImport: boolean,
     modTitle: string = '',
+): MappedFile[] {
+    const result = buildGameflow(mappedFiles, modDir, gameVersion, useOutfitImport, modTitle);
+    if (useOutfitImport) addOutfitLabel(result, modDir);
+    return result;
+}
+
+function buildGameflow(
+    mappedFiles: MappedFile[],
+    modDir: string,
+    gameVersion: number,
+    useOutfitImport: boolean,
+    modTitle: string,
 ): MappedFile[] {
     const result = mappedFiles.slice();
     const modPrefix = 'games/' + modDir + '/';
@@ -517,72 +529,50 @@ export function setupCustomGameflow(
     return result;
 }
 
+// An outfit of the meshes the level itself gives Lara. A game's outfits file
+// replaces the shipped one, so this writes the shipped one as the TRX the
+// converter targets has it, plus this outfit, built like the game's classic
+// outfit: the braid and guns of TRX's own objects, on Lara's level meshes.
 function injectLevelDefaultOutfit(modDir: string, gameVersion: number): MappedFile[] {
-    const files: MappedFile[] = [];
+    const outfits = parseJSON5(getCfgFile('outfits.json5')) as AnyObj;
+    const classic = outfits.outfits && outfits.outfits[`tr${gameVersion}_classic`];
+    if (!classic || outfits.outfits.level_default) return [];
+    const own: AnyObj = JSON.parse(JSON.stringify(classic));
+    own.name_gs = 'dynamic/enums/lara_outfit/level_default';
+    own.mesh_object = 'lara';
+    // Lara's level object has no combat face or holster-less thighs of its
+    // own, and no extra outfits to turn into.
+    own.combat_face_offset = -1;
+    delete own.no_holster_offsets;
+    delete own.extra_outfits;
+    delete own.speech_faces;
+    outfits.outfits.level_default = own;
+    return [{
+        path: 'games/' + modDir + '/outfits.json5',
+        data: new TextEncoder().encode(JSON.stringify(outfits, null, 4)),
+    }];
+}
 
-    let braid: AnyObj;
-    if (gameVersion === 1) {
-        braid = {
-            mode: 'BRAID_MODE_TR1_FULL',
-            mesh_offset: 10,
-            gold_offset: 16,
-            hair_pos: { x: 0, y: 20, z: -45 },
-        };
+// The name the settings show for that outfit, in the game's own strings.
+function addOutfitLabel(files: MappedFile[], modDir: string): void {
+    const path = 'games/' + modDir + '/strings.json5';
+    let file = files.find((f) => f.path === path);
+    let strings: AnyObj = {};
+    if (file) {
+        try {
+            strings = parseJSON5(new TextDecoder().decode(file.data)) as AnyObj;
+        } catch {
+            return;
+        }
     } else {
-        braid = {
-            mesh_offset: 22,
-            gold_offset: 28,
-            hair_pos: { x: 0, y: -23, z: -55 },
-        };
+        file = { path, data: new Uint8Array() };
+        files.push(file);
     }
-    const gunMap = gameVersion === 1 ? 0 : gameVersion === 3 ? 3 : 2;
-
-    try {
-        const outfitsText = getCfgFile('outfits.json5');
-        const outfits = parseJSON5(outfitsText) as AnyObj;
-        if (outfits.outfits && !outfits.outfits.level_default) {
-            outfits.outfits.level_default = {
-                name_gs: 'dynamic/enums/lara_outfit/level_default',
-                mesh_object: 'O_LARA',
-                gun_map: gunMap,
-                combat_face_offset: -1,
-                supports_sunglasses: false,
-                braid: braid,
-            };
-            files.push({
-                path: 'games/' + modDir + '/outfits.json5',
-                data: new TextEncoder().encode(
-                    JSON.stringify(outfits, null, 4)),
-            });
-        }
-    } catch (e) {
-        console.warn('[TRX] Failed to inject level_default outfit:', e);
-    }
-
-    try {
-        const cfgEntries = getCfgFiles();
-        for (let i = 0; i < cfgEntries.length; i++) {
-            if (cfgEntries[i].indexOf('base_strings') !== 0
-                || !cfgEntries[i].endsWith('.json5')) continue;
-            const strText = getCfgFile(cfgEntries[i]);
-            const strObj = parseJSON5(strText) as AnyObj;
-            if (strObj.dynamic && strObj.dynamic.enums
-                && strObj.dynamic.enums.lara_outfit
-                && !strObj.dynamic.enums.lara_outfit.level_default) {
-                strObj.dynamic.enums.lara_outfit.level_default
-                    = 'Level Default';
-                files.push({
-                    path: 'games/' + modDir + '/' + cfgEntries[i],
-                    data: new TextEncoder().encode(
-                        JSON.stringify(strObj, null, 4)),
-                });
-            }
-        }
-    } catch (e) {
-        console.warn('[TRX] Failed to inject level_default string:', e);
-    }
-
-    return files;
+    strings.dynamic = strings.dynamic || {};
+    strings.dynamic.enums = strings.dynamic.enums || {};
+    strings.dynamic.enums.lara_outfit = strings.dynamic.enums.lara_outfit || {};
+    strings.dynamic.enums.lara_outfit.level_default = 'Level Default';
+    file.data = new TextEncoder().encode(JSON.stringify(strings, null, 4));
 }
 
 function generateStrings(

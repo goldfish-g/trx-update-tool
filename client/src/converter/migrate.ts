@@ -4,6 +4,7 @@
 // module (lua.ts), and the names its data files use are updated here.
 
 import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
+import { migrateOutfits } from './outfits.ts';
 import { OBJECT_KEYS, OBJECT_SYMBOLS } from './renames.generated.ts';
 import type { MappedFile } from './types.ts';
 
@@ -55,6 +56,7 @@ export function migrateToCurrentTRX(files: MappedFile[], options: MigrationOptio
 
     const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release);
     notes.push(...scripts.notes);
+    notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release));
 
     // TRX 1.11 renamed objects; a file written since uses the new names.
     const renamesApply = guess.release !== null && guess.release <= 10;
