@@ -112,6 +112,38 @@ function migrateGameflow(
     walkPaths(gameflow);
     if (paths > 0) notes.push(`Named ${paths} file${paths === 1 ? '' : 's'} the way TRX looks them up now.`);
 
+    // Colours: the engine reads hex text, such as #72FFFF, where older
+    // releases also took an array of channels from 0 to 1.
+    let colors = 0;
+    const walkColors = (node: unknown): void => {
+        if (Array.isArray(node)) {
+            node.forEach(walkColors);
+        } else if (isObject(node)) {
+            for (const key of Object.keys(node)) {
+                const value = node[key];
+                if (key === 'water_color' && Array.isArray(value) && value.length === 3 && value.every((v) => typeof v === 'number')) {
+                    node[key] = '#' + value.map((v: number) => Math.round(Math.min(1, Math.max(0, v)) * 255).toString(16).padStart(2, '0')).join('').toUpperCase();
+                    colors++;
+                } else {
+                    walkColors(value);
+                }
+            }
+        }
+    };
+    walkColors(gameflow);
+    if (colors > 0) notes.push(`Wrote ${colors} water color${colors === 1 ? '' : 's'} as hex text, which TRX reads now.`);
+
+    // The places of the bars and counters, which the HUD's Lua declares now,
+    // take underscores, as top_left. The HUD respells a dashed value as it
+    // starts, which fails while the game flow enforces the setting.
+    if (isObject(gameflow.enforced_config)) {
+        for (const [key, value] of Object.entries(gameflow.enforced_config)) {
+            if (typeof value === 'string' && /(_location|enemy_healthbar_show_mode)$/.test(key) && value.includes('-')) {
+                gameflow.enforced_config[key] = value.replace(/-/g, '_');
+            }
+        }
+    }
+
     // TRX 1.2: the savegame pattern.
     if (gameflow.savegame_fmt_bson !== undefined) {
         gameflow.savegame_file_fmt ??= gameflow.savegame_fmt_bson;
