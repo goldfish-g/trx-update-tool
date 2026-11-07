@@ -1,5 +1,6 @@
 import { unzipSync, gunzipSync } from 'fflate';
 import { GOLD_MARKER } from './basegame.ts';
+import { legacyPath } from './legacy.ts';
 import { levelFileGame } from './level.ts';
 import { decodeLzma } from './lzma.ts';
 import type { GameVersion, MappedFile, Language } from './types.ts';
@@ -206,6 +207,13 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     const laidOut = /^games\/[^/]+\/(.+)$/.exec(lowerPath);
     if (laidOut) {
         return prefix + laidOut[1];
+    }
+
+    // The game flow and strings of the engines before TRX, which
+    // legacy.ts gives the shape of TRX's.
+    const legacy = legacyPath(lowerPath);
+    if (legacy) {
+        return prefix + legacy;
     }
 
     // Lua outside a game directory is either the engine's own or, before

@@ -8,6 +8,7 @@
 
 import compatTemplate from './lua/trx_compat.lua?raw';
 import { parseJSON5 } from './json5.ts';
+import { LEGACY_MARKER } from './legacy.ts';
 import { luaObjectRenames } from './objects.ts';
 import type { MappedFile } from './types.ts';
 
@@ -225,6 +226,14 @@ const GAMEFLOW_SIGNATURES: [RegExp, number][] = [
  * the oldest release whose API its scripts and game flow still use.
  */
 export function detectRelease(upload: MappedFile[], mapped: MappedFile[]): ReleaseGuess {
+    // A game made for the engines before TRX now has the shape of a TRX 1.0
+    // game (legacy.ts).
+    const legacy = mapped.find((f) => f.path.endsWith('/' + LEGACY_MARKER));
+    if (legacy) {
+        const exe = upload.find((f) => f.path.toLowerCase().endsWith('.exe'));
+        const version = exe ? executableVersion(exe.data) : null;
+        return { release: 0, from: version ?? 'its game flow' };
+    }
     for (const entry of upload) {
         if (!entry.path.toLowerCase().endsWith('.exe')) continue;
         const version = executableVersion(entry.data);

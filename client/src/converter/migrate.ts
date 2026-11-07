@@ -10,6 +10,7 @@ import { applyLevelRules } from './levelrules.ts';
 import { baseGame } from './basegame.ts';
 import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
+import { LEGACY_MARKER } from './legacy.ts';
 import type { MappedFile } from './types.ts';
 
 export type MigrationResult = {
@@ -27,8 +28,18 @@ export type MigrationOptions = {
 
 export async function migrateToCurrentTRX(files: MappedFile[], options: MigrationOptions): Promise<MigrationResult> {
     const notes: string[] = [];
+    const legacy = files.find((f) => f.path === `games/${options.modDir}/${LEGACY_MARKER}`);
+    if (legacy) {
+        try {
+            notes.push(...(JSON.parse(new TextDecoder().decode(legacy.data)).notes ?? []));
+        } catch {
+            // The notes are only for the person converting.
+        }
+    }
     const guess = detectRelease(options.upload, files);
-    if (guess.release !== null && guess.release < CURRENT_RELEASE) {
+    if (legacy) {
+        // Its own note says what it was made for.
+    } else if (guess.release !== null && guess.release < CURRENT_RELEASE) {
         notes.push(`Made for TRX 1.${guess.release} (from ${guess.from}).`);
     }
 

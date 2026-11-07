@@ -2,6 +2,7 @@ import type { MappedFile } from './types.ts';
 import { parseJSON5 } from './json5.ts';
 import { parseTR2Script } from './tombpc.ts';
 import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
+import { translateLegacy } from './legacy.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -62,8 +63,14 @@ function buildGameflow(
     useOutfitImport: boolean,
     modTitle: string,
 ): MappedFile[] {
-    const result = mappedFiles.slice();
     const modPrefix = 'games/' + modDir + '/';
+    // A game made for an engine before TRX (Tomb1Main, TR1X, TR2X and their
+    // kin) takes TRX 1.0's shape first.
+    if (!mappedFiles.some((f) => f.path === modPrefix + 'gameflow.json5')) {
+        const legacy = translateLegacy(mappedFiles, modDir, gameVersion, modTitle);
+        if (legacy) return legacy.files;
+    }
+    const result = mappedFiles.slice();
     const templateMod = `tr${gameVersion}-level`;
     const extendsBase = `tr${gameVersion}`;
     const defaultOutfit = useOutfitImport
@@ -549,7 +556,7 @@ function buildGameflow(
 // replaces the shipped one, so this writes the shipped one as the TRX the
 // converter targets has it, plus this outfit, built like the game's classic
 // outfit: the braid and guns of TRX's own objects, on Lara's level meshes.
-function injectLevelDefaultOutfit(modDir: string, gameVersion: number): MappedFile[] {
+export function injectLevelDefaultOutfit(modDir: string, gameVersion: number): MappedFile[] {
     const outfits = parseJSON5(getCfgFile('outfits.json5')) as AnyObj;
     const classic = outfits.outfits && outfits.outfits[`tr${gameVersion}_classic`];
     if (!classic || outfits.outfits.level_default) return [];
@@ -570,7 +577,7 @@ function injectLevelDefaultOutfit(modDir: string, gameVersion: number): MappedFi
 }
 
 // The name the settings show for that outfit, in the game's own strings.
-function addOutfitLabel(files: MappedFile[], modDir: string): void {
+export function addOutfitLabel(files: MappedFile[], modDir: string): void {
     const path = 'games/' + modDir + '/strings.json5';
     let file = files.find((f) => f.path === path);
     let strings: AnyObj = {};

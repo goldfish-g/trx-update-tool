@@ -17,7 +17,7 @@ Upload a ZIP of your custom level data, and the converter will produce a ready-t
 - Strips remastered SFX headers so original and remastered `MAIN.SFX` files both work
 - Translates `TOMBPC.DAT` binary game scripts into TRX gameflow events (level sequencing, music triggers, inventory items, cutscenes, FMVs)
 - Generates `gameflow.json5` and localized `strings-*.json5` from templates
-- Handles TR2X/TR1X extended gameflows (filters to uploaded levels, cleans injection paths)
+- Translates games made for the engines before TRX (Tomb1Main, TR1X, TR2X, and Tomb2Main and Tomb3Main, the names TR2X and an abandoned TR3 project went by) into TRX packages: their game flow, strings and injections take the shape TRX 1.0 read, then go the rest of the way like any older TRX game
 - Optionally injects a `level_default` outfit so custom levels can use their embedded Lara model
 - Detects multi-language audio (remastered releases) and lets you pick one
 - Reads ZIP archives whose entries 7-Zip compressed with LZMA
