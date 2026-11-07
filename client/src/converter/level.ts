@@ -93,6 +93,12 @@ function gameOf(version: number): 1 | 2 | 3 | null {
     return null;
 }
 
+/** The game a level file was made for, from the version it starts with. */
+export function levelFileGame(data: Uint8Array): 1 | 2 | 3 | null {
+    if (data.length < 4) return null;
+    return gameOf(new DataView(data.buffer, data.byteOffset, 4).getUint32(0, true));
+}
+
 /** The level's floor data and items, or null for a file it cannot read. */
 export function readLevel(data: Uint8Array): LevelData | null {
     try {

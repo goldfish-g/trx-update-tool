@@ -1,7 +1,8 @@
 import { unzipSync, gunzipSync } from 'fflate';
 import { GOLD_MARKER } from './basegame.ts';
+import { levelFileGame } from './level.ts';
 import { decodeLzma } from './lzma.ts';
-import type { MappedFile, Language } from './types.ts';
+import type { GameVersion, MappedFile, Language } from './types.ts';
 
 const LEVEL_EXTS = ['.phd', '.tr2', '.psx', '.tub'];
 const MUSIC_EXTS = ['.flac', '.ogg', '.mp3', '.wav', '.wma'];
@@ -395,4 +396,24 @@ export function processFiles(
     }
 
     return { mapped, languages };
+}
+
+/**
+ * The game an archive's levels were made for, by the version each level file
+ * states: TR2 and TR3 both name their levels .tr2, and a TR3 game need not
+ * bring cutscenes or music to tell it by.
+ */
+export function detectGameVersion(entries: MappedFile[]): GameVersion {
+    const votes: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    for (const entry of entries) {
+        if (!/\.(phd|tr2)$/i.test(entry.path)) continue;
+        const game = levelFileGame(entry.data);
+        if (game !== null) votes[game]++;
+    }
+    const best = ([1, 2, 3] as const).reduce((a, b) => (votes[b] > votes[a] ? b : a), 1 as 1 | 2 | 3);
+    if (votes[best] > 0) return String(best) as GameVersion;
+    // No level said: the extension, then what TR3 brings beside its levels.
+    if (entries.some((e) => /\.phd$/i.test(e.path))) return '1';
+    const tr3 = entries.some((e) => /(^|\/)cuts\//i.test(e.path) || /\.wad$/i.test(e.path));
+    return tr3 ? '3' : '2';
 }

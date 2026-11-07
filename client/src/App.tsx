@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { MappedFile, Language, GameVersion } from './converter/types.ts';
-import { extractArchive, processFiles, filterByLanguage } from './converter/gamedata.ts';
+import { extractArchive, processFiles, filterByLanguage, detectGameVersion } from './converter/gamedata.ts';
 import { setupCustomGameflow } from './converter/gameflow.ts';
 import { migrateToCurrentTRX } from './converter/migrate.ts';
 import { createOutputZip } from './converter/zip.ts';
@@ -32,19 +32,6 @@ function makeModId(version: GameVersion, title: string): string {
   return 'tr' + version + '-' + slugify(title);
 }
 
-function detectGameVersion(entries: MappedFile[]): GameVersion {
-  for (const entry of entries) {
-    const lower = entry.path.toLowerCase();
-    if (lower.endsWith('.phd')) return '1';
-    if (lower.endsWith('.tr2')) {
-      const hasCuts = entries.some(e => e.path.toLowerCase().includes('cuts/'));
-      const hasTR3Audio = entries.some(e => e.path.toLowerCase().endsWith('.wad'));
-      if (hasCuts || hasTR3Audio) return '3';
-      return '2';
-    }
-  }
-  return '2';
-}
 
 function App() {
   const [state, setState] = useState<AppState>({ step: 'upload' });
