@@ -8,10 +8,11 @@
 // keeps both the builder's changes and what TRX has added since.
 
 import { BASE_FILES, BASE_INJECTIONS } from '../templates/base/index.ts';
-import { GAME_STRING_IDS, STOCK_BLOBS } from './history.generated.ts';
+import { GAME_STRING_IDS } from './history.generated.ts';
 import { parseJSON5 } from './json5.ts';
 import { CURRENT_RELEASE, currentMarkup } from './lua.ts';
 import { currentObjectKey, STATS_BACKGROUND } from './objects.ts';
+import { currentInjectionName, isStock, stockInjections } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -52,20 +53,42 @@ function baseName(path: string): string {
 // Copies of TRX's own files
 // ---------------------------------------------------------------------------
 
-async function gitBlobId(data: Uint8Array): Promise<string> {
-    const head = encoder.encode(`blob ${data.length}\0`);
-    const all = new Uint8Array(head.length + data.length);
-    all.set(head);
-    all.set(data, head.length);
-    const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', all));
-    return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('');
+/** Maps the names every injection list of a game flow gives. */
+function renameInjections(value: unknown, names: Map<string, string>): void {
+    if (Array.isArray(value)) {
+        for (const item of value) renameInjections(item, names);
+        return;
+    }
+    if (!isObject(value)) return;
+    for (const [key, child] of Object.entries(value)) {
+        if (key === 'injections' && Array.isArray(child)) {
+            const renamed = child.map((name) => (typeof name === 'string' ? names.get(baseName(name)) ?? name : name));
+            value[key] = renamed.filter((name, i) => renamed.indexOf(name) === i);
+        } else {
+            renameInjections(child, names);
+        }
+    }
 }
 
-/** Whether a file is one TRX shipped, unchanged. */
-async function isStock(file: MappedFile): Promise<boolean> {
-    const known = STOCK_BLOBS[baseName(file.path)];
-    if (!known) return false;
-    return known.includes((await gitBlobId(file.data)).slice(0, 16));
+/**
+ * Copies of TRX's injections that the game renamed take the names TRX
+ * shipped them under, in its injections/ and its game flow, so that they go
+ * as copies left under those names go.
+ */
+async function renameStockInjections(files: MappedFile[], prefix: string, gameVersion: number, gameflowFile: MappedFile | undefined): Promise<void> {
+    const gameflow = gameflowFile && readJson(gameflowFile);
+    if (!gameflowFile || !gameflow) return;
+    const names = new Map<string, string>();
+    for (const [file, stock] of await stockInjections(files, prefix + 'injections/', gameVersion)) {
+        const own = baseName(file.path);
+        const to = prefix + 'injections/' + stock;
+        if (own === stock || files.some((other) => other.path === to)) continue;
+        file.path = to;
+        names.set(own, currentInjectionName(stock));
+    }
+    if (names.size === 0) return;
+    renameInjections(gameflow, names);
+    writeJson(gameflowFile, gameflow);
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +547,7 @@ export async function migrateDataFiles(
     let merged = 0;
     const scripts: LevelScripts = new Map();
     const gameflowFile = files.find((f) => f.path === prefix + 'gameflow.json5');
+    await renameStockInjections(files, prefix, gameVersion, gameflowFile);
     const ownAnims = !gameflowFile || !/lara_animations\.bin/.test(decoder.decode(gameflowFile.data));
 
     for (const file of files) {
@@ -547,7 +571,7 @@ export async function migrateDataFiles(
         }
         if (kind !== null && (animCatalog || await isStock(file))) {
             // Kept where the TRX it now runs on no longer ships one.
-            if (kind !== 'injection' || (BASE_INJECTIONS[game] ?? []).includes(name)) {
+            if (kind !== 'injection' || (BASE_INJECTIONS[game] ?? []).includes(currentInjectionName(name))) {
                 stock++;
                 continue;
             }

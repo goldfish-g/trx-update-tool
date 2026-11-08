@@ -3,6 +3,7 @@ import { parseJSON5 } from './json5.ts';
 import { parseTR2Script } from './tombpc.ts';
 import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
 import { translateLegacy } from './legacy.ts';
+import { currentInjectionName } from './stock.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -27,15 +28,9 @@ const HOME_LEVELS: Record<string, boolean> = {
     'house.tr2': true,
 };
 
-// Injections TRX has renamed since older engines named them.
-const RENAMED_INJECTIONS: Record<string, string> = {
-    'purple_crystal.bin': 'crystal.bin',
-};
-
 // The name TRX knows an injection by: no directory, and its current name.
 function currentInjection(path: string): string {
-    const name = path.split('/').pop()!;
-    return RENAMED_INJECTIONS[name.toLowerCase()] ?? name;
+    return currentInjectionName(path.split('/').pop()!);
 }
 
 // The file name a script gives, as the archive maps it: lower case, with no
@@ -44,30 +39,30 @@ function baseName(path: string): string {
     return path.replace(/\\/g, '/').split('/').pop()!.toLowerCase();
 }
 
-export function setupCustomGameflow(
+export async function setupCustomGameflow(
     mappedFiles: MappedFile[],
     modDir: string,
     gameVersion: number,
     useOutfitImport: boolean,
     modTitle: string = '',
-): MappedFile[] {
-    const result = buildGameflow(mappedFiles, modDir, gameVersion, useOutfitImport, modTitle);
+): Promise<MappedFile[]> {
+    const result = await buildGameflow(mappedFiles, modDir, gameVersion, useOutfitImport, modTitle);
     if (useOutfitImport) addOutfitLabel(result, modDir);
     return result;
 }
 
-function buildGameflow(
+async function buildGameflow(
     mappedFiles: MappedFile[],
     modDir: string,
     gameVersion: number,
     useOutfitImport: boolean,
     modTitle: string,
-): MappedFile[] {
+): Promise<MappedFile[]> {
     const modPrefix = 'games/' + modDir + '/';
     // A game made for an engine before TRX (Tomb1Main, TR1X, TR2X and their
     // kin) takes TRX 1.0's shape first.
     if (!mappedFiles.some((f) => f.path === modPrefix + 'gameflow.json5')) {
-        const legacy = translateLegacy(mappedFiles, modDir, gameVersion, modTitle);
+        const legacy = await translateLegacy(mappedFiles, modDir, gameVersion, modTitle);
         if (legacy) return legacy.files;
     }
     const result = mappedFiles.slice();

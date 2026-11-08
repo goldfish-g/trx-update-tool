@@ -125,7 +125,7 @@ function App() {
 
     setState({ step: 'converting', message: 'Generating gameflow...', progress: 0.65 });
 
-    const gameflowFiles = setupCustomGameflow(mapped, modId, +version, outfitImport, title);
+    const gameflowFiles = await setupCustomGameflow(mapped, modId, +version, outfitImport, title);
 
     setState({ step: 'converting', message: 'Updating scripts...', progress: 0.75 });
 

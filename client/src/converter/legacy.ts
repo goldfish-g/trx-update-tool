@@ -15,6 +15,7 @@ import { injectLevelDefaultOutfit, addOutfitLabel } from './gameflow.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_STRING_IDS } from './legacy.generated.ts';
 import { addMeshObject, readLevelObjects } from './level.ts';
+import { currentInjectionName, stockInjections } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -172,7 +173,8 @@ const DROPPED_EVENTS = new Set(['start_game', 'stop_game', 'start_cine', 'set_ca
 const LOST_EVENTS = new Set(['flip_map', 'mesh_swap']);
 /** Injections Lara needs since TRX 1.0, where her levels do not bring her shotgun and extra animations. */
 const LARA_INJECTIONS: Record<number, string[]> = { 1: ['lara_guns.bin', 'lara_extra.bin'], 2: ['lara_extra.bin'] };
-const RENAMED_INJECTIONS: Record<string, string> = { 'purple_crystal.bin': 'crystal.bin' };
+/** Injections TR1X 4.6 merged into another one, which TRX's own carries: lara_jumping.bin into lara_animations.bin. */
+const MERGED_INJECTIONS: Record<number, [string, string][]> = { 1: [['lara_jumping.bin', 'lara_animations.bin']] };
 
 export type LegacyResult = { files: MappedFile[]; notes: string[] };
 
@@ -266,7 +268,7 @@ function withGunsObject(data: Uint8Array, gameVersion: number): Uint8Array | nul
  * files of a TRX 1.0 game, in games/<mod>/. Returns null when it has no
  * legacy game flow, or one that cannot be read.
  */
-export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersion: number, modTitle: string): LegacyResult | null {
+export async function translateLegacy(mapped: MappedFile[], modDir: string, gameVersion: number, modTitle: string): Promise<LegacyResult | null> {
     const prefix = `games/${modDir}/`;
     const source = findLegacy(mapped, prefix, 'gameflow');
     if (!source) return null;
@@ -302,16 +304,28 @@ export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersio
     addFlatStrings(old.game_strings, strings.objects, strings.game_strings);
 
     // Injections: no directory, TRX's current name, and the game's own
-    // files under injections/, where TRX looks for them now.
+    // files under injections/, where TRX looks for them now. A copy of one
+    // of TRX's own files goes by the name TRX shipped it under, whatever
+    // the game named it, so the game gets the one the current TRX ships.
+    const stockNames = await stockInjections(files, prefix, gameVersion);
+    const injectionNames = new Map<string, string>();
     const injection = (path: unknown): string | null => {
         if (typeof path !== 'string' || !path) return null;
-        const name = RENAMED_INJECTIONS[baseName(path)] ?? baseName(path);
-        const loose = byPath.get(prefix + name);
-        if (loose && !byPath.has(prefix + 'injections/' + name)) {
-            byPath.delete(loose.path);
-            loose.path = prefix + 'injections/' + name;
-            byPath.set(loose.path, loose);
+        const own = baseName(path);
+        const known = injectionNames.get(own);
+        if (known !== undefined) return known;
+        const file = byPath.get(prefix + 'injections/' + own) ?? byPath.get(prefix + own);
+        let stock = file ? stockNames.get(file) : undefined;
+        // A file of the game's own under that name wins.
+        if (stock !== undefined && (byPath.get(prefix + 'injections/' + stock) ?? file) !== file) stock = undefined;
+        const name = currentInjectionName(stock ?? own);
+        const to = prefix + 'injections/' + (stock ?? name);
+        if (file && file.path !== to && !byPath.has(to)) {
+            byPath.delete(file.path);
+            file.path = to;
+            byPath.set(to, file);
         }
+        injectionNames.set(own, name);
         return name;
     };
     const injections = (list: unknown): string[] | undefined =>
@@ -474,6 +488,31 @@ export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersio
     }
     out.levels = levels;
     if (cutscenes.length > 0) out.cutscenes = cutscenes;
+
+    // An injection TR1X merged into another goes where the game takes that
+    // other one from TRX, whose own carries it: injected on top, it would
+    // apply its changes a second time.
+    const fromTRX = (name: string): boolean => {
+        const file = byPath.get(prefix + 'injections/' + name);
+        return !file || stockNames.get(file) === name;
+    };
+    for (const [merged, into] of MERGED_INJECTIONS[gameVersion] ?? []) {
+        if (!fromTRX(merged) || !fromTRX(into)) continue;
+        const inherited = Array.isArray(out.injections) && out.injections.includes(into);
+        const holders: AnyObj[] = [out, ...(out.title ? [out.title] : []), ...levels, ...cutscenes];
+        for (const holder of holders) {
+            const list = holder.injections;
+            if (!Array.isArray(list) || !list.includes(merged)) continue;
+            if (list.includes(into) || (holder !== out && holder.inherit_injections !== false && inherited)) {
+                holder.injections = list.filter((name: string) => name !== merged);
+            }
+        }
+        const file = byPath.get(prefix + 'injections/' + merged);
+        if (file && !holders.some((holder) => Array.isArray(holder.injections) && holder.injections.includes(merged))) {
+            files.splice(files.indexOf(file), 1);
+            byPath.delete(file.path);
+        }
+    }
     if (fmvs.length > 0) out.fmvs = fmvs;
     out.engine = gameVersion;
     out.extends = `tr${gameVersion}`;
