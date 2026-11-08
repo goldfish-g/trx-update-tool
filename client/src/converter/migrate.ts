@@ -2,10 +2,12 @@
 // TRX's migration guide (docs/trx/MIGRATING.md) describes: its scripts reach
 // the API of the release they were written for through a compatibility
 // module (lua.ts), Lara's outfits match the objects her levels carry
-// (outfits.ts), and its other data files take the current names and layout
-// (datafiles.ts).
+// (outfits.ts), its other data files take the current names and layout
+// (datafiles.ts), and TRX's font is rebuilt with the lettering its levels
+// bring (font.ts).
 
 import { migrateDataFiles } from './datafiles.ts';
+import { rebuildFonts } from './font.ts';
 import { applyLevelRules } from './levelrules.ts';
 import { baseGame } from './basegame.ts';
 import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
@@ -52,6 +54,7 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     notes.push(...rules.notes);
     const data = await migrateDataFiles(rules.files, options.modDir, options.gameVersion, guess.release);
     notes.push(...data.notes);
+    notes.push(...await rebuildFonts(data.files, options.modDir, options.gameVersion));
 
     // Working files of the converter's own.
     const out = data.files.filter((file) => !/^games\/[^/]+\/(_meta|_loose)\//i.test(file.path));

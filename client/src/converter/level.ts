@@ -189,6 +189,204 @@ export function readLevel(data: Uint8Array): LevelData | null {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Font
+// ---------------------------------------------------------------------------
+
+/** One sprite of a font, as its texture shows it. */
+export type Glyph = {
+    width: number;
+    height: number;
+    /** Where the sprite is drawn, from the cursor on the baseline. */
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+    /** width × height pixels, red, green, blue and alpha; alpha is 0 or 255. */
+    rgba: Uint8Array;
+};
+
+/** The slot of the font object in each game, in its level files and in TRX. */
+export const ALPHABET_SLOT: Record<number, number> = { 1: 190, 2: 255, 3: 356 };
+
+/** The part of a glyph that shows: where it starts in the sprite, and its size. */
+export function glyphBounds(glyph: Glyph): { x: number; y: number; width: number; height: number } | null {
+    let left = glyph.width;
+    let top = glyph.height;
+    let right = -1;
+    let bottom = -1;
+    for (let y = 0; y < glyph.height; y++) {
+        for (let x = 0; x < glyph.width; x++) {
+            if (!glyph.rgba[(y * glyph.width + x) * 4 + 3]) continue;
+            left = Math.min(left, x);
+            right = Math.max(right, x);
+            top = Math.min(top, y);
+            bottom = Math.max(bottom, y);
+        }
+    }
+    return right < 0 ? null : { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
+}
+
+/**
+ * What a glyph looks like, wherever it sits in its sprite and whatever
+ * palette it was drawn through: the shape of its pixels, as
+ * "<width>x<height>:<hash>", and their average colour. Null for an empty one.
+ */
+export function glyphFingerprint(glyph: Glyph): { shape: string; colour: [number, number, number] } | null {
+    const bounds = glyphBounds(glyph);
+    if (!bounds) return null;
+    let hash = 0x811c9dc5;
+    const mix = (byte: number) => {
+        hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+    };
+    for (const ch of `${bounds.width}x${bounds.height}:`) mix(ch.charCodeAt(0));
+    const sum = [0, 0, 0];
+    let shown = 0;
+    for (let y = bounds.y; y < bounds.y + bounds.height; y++) {
+        for (let x = bounds.x; x < bounds.x + bounds.width; x++) {
+            const o = (y * glyph.width + x) * 4;
+            const on = glyph.rgba[o + 3] !== 0;
+            mix(on ? 49 : 48);
+            if (!on) continue;
+            sum[0] += glyph.rgba[o];
+            sum[1] += glyph.rgba[o + 1];
+            sum[2] += glyph.rgba[o + 2];
+            shown++;
+        }
+    }
+    const hex = hash.toString(16).padStart(8, '0');
+    return { shape: `${bounds.width}x${bounds.height}:${hex}`, colour: [0, 1, 2].map((k) => Math.round(sum[k] / shown)) as [number, number, number] };
+}
+
+/** The sprites of the level's font, or null for a file it cannot read or a level without one. */
+export function readAlphabet(data: Uint8Array): { gameVersion: 1 | 2 | 3; glyphs: Glyph[] } | null {
+    try {
+        const r = new Reader(data);
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        const game = gameOf(r.u32());
+        if (game === null) return null;
+        if (game !== 1) r.skip(1792); // palettes
+        const pageCount = r.s32();
+        const pages8 = r.at;
+        const pages16 = r.at + pageCount * TEXTURE_PAGE;
+        r.skip(pageCount * TEXTURE_PAGE * (game === 1 ? 1 : 3));
+        r.skip(4);
+        const rooms = r.u16();
+        for (let i = 0; i < rooms; i++) {
+            r.skip(16);
+            r.arr32(2);
+            r.arr16(32);
+            const sizeZ = r.s16();
+            const sizeX = r.s16();
+            r.skip(sizeZ * sizeX * 8);
+            if (game === 1) {
+                r.skip(2);
+                r.arr16(18);
+                r.arr16(18);
+                r.skip(4);
+            } else if (game === 2) {
+                r.skip(6);
+                r.arr16(24);
+                r.arr16(20);
+                r.skip(4);
+            } else {
+                r.skip(4);
+                r.arr16(24);
+                r.arr16(20);
+                r.skip(7);
+            }
+        }
+        r.arr32(2); // floor data
+        r.arr32(2); // object meshes
+        r.arr32(4); // object mesh pointers
+        r.arr32(32); // animations
+        r.arr32(6); // animation changes
+        r.arr32(8); // animation ranges
+        r.arr32(2); // animation commands
+        r.arr32(4); // animation bones
+        r.arr32(2); // animation frames
+        r.arr32(18); // objects
+        r.arr32(32); // static objects
+        if (game !== 3) r.arr32(20); // object textures
+        const spriteCount = r.s32();
+        const sprites = r.at;
+        r.skip(spriteCount * 16);
+        let first = -1;
+        let count = 0;
+        const sequences = r.s32();
+        for (let i = 0; i < sequences; i++) {
+            const id = r.s32();
+            const length = -r.s16();
+            const offset = r.s16();
+            if (id === ALPHABET_SLOT[game]) {
+                first = offset;
+                count = length;
+            }
+        }
+        if (first < 0 || count <= 0 || first + count > spriteCount) return null;
+
+        // TR1 levels colour their pages through the palette after the items.
+        let palette = 0;
+        if (game === 1) {
+            r.arr32(16); // cameras
+            r.arr32(16); // sound sources
+            const boxes = r.s32();
+            r.skip(boxes * 20);
+            r.arr32(2); // overlaps
+            r.skip(boxes * 12); // zones
+            r.arr32(2); // animated textures
+            r.arr32(22); // items
+            r.skip(8192); // light table
+            palette = r.at;
+            r.skip(768);
+        }
+
+        const glyphs: Glyph[] = [];
+        for (let i = 0; i < count; i++) {
+            const at = sprites + (first + i) * 16;
+            const page = view.getUint16(at, true);
+            const left = data[at + 2];
+            const top = data[at + 3];
+            const width = (view.getUint16(at + 4, true) + 1) >> 8;
+            const height = (view.getUint16(at + 6, true) + 1) >> 8;
+            const rgba = new Uint8Array(width * height * 4);
+            for (let y = 0; y < height && page < pageCount; y++) {
+                for (let x = 0; x < width && left + x < 256 && top + y < 256; x++) {
+                    const pixel = page * TEXTURE_PAGE + (top + y) * 256 + left + x;
+                    const o = (y * width + x) * 4;
+                    if (game === 1) {
+                        const index = data[pages8 + pixel];
+                        if (index === 0) continue;
+                        rgba[o] = data[palette + index * 3] * 4;
+                        rgba[o + 1] = data[palette + index * 3 + 1] * 4;
+                        rgba[o + 2] = data[palette + index * 3 + 2] * 4;
+                        rgba[o + 3] = 255;
+                    } else {
+                        const value = view.getUint16(pages16 + pixel * 2, true);
+                        if (!(value & 0x8000)) continue;
+                        rgba[o] = Math.round(((value >> 10) & 31) * 255 / 31);
+                        rgba[o + 1] = Math.round(((value >> 5) & 31) * 255 / 31);
+                        rgba[o + 2] = Math.round((value & 31) * 255 / 31);
+                        rgba[o + 3] = 255;
+                    }
+                }
+            }
+            glyphs.push({
+                width,
+                height,
+                x0: view.getInt16(at + 8, true),
+                y0: view.getInt16(at + 10, true),
+                x1: view.getInt16(at + 12, true),
+                y1: view.getInt16(at + 14, true),
+                rgba,
+            });
+        }
+        return { gameVersion: game, glyphs };
+    } catch {
+        return null;
+    }
+}
+
 const TO_CAMERA = 1;
 const TO_FINISH = 7;
 const TO_FLYBY = 12;
