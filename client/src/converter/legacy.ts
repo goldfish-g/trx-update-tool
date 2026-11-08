@@ -14,6 +14,7 @@
 import { injectLevelDefaultOutfit, addOutfitLabel } from './gameflow.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_STRING_IDS } from './legacy.generated.ts';
+import { addMeshObject, readLevelObjects } from './level.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -174,6 +175,91 @@ const LARA_INJECTIONS: Record<number, string[]> = { 1: ['lara_guns.bin', 'lara_e
 const RENAMED_INJECTIONS: Record<string, string> = { 'purple_crystal.bin': 'crystal.bin' };
 
 export type LegacyResult = { files: MappedFile[]; notes: string[] };
+
+// ---------------------------------------------------------------------------
+// Lara's guns
+// ---------------------------------------------------------------------------
+
+// Those engines drew the guns in Lara's hands, in her holsters and on her
+// back with meshes of the guns' own objects (lara_pistols, lara_shotgun and
+// so on), each one a whole Lara whose hands hold that gun and whose thighs
+// carry it. TRX draws them through her outfit, from one object of gun meshes
+// and a map of where each gun's meshes are in it; without that object she
+// holds nothing. So each level gets one, made of the meshes its gun objects
+// already have, in a skin slot TRX's own outfits leave free, and her outfit
+// a map into it: the level's own guns, as its author made them.
+
+type GunBlock = { slot: number; gun: string; kind: 'pistol' | 'rifle' | 'flare' };
+
+const LARA_MESHES = 15;
+/** lara_skin_swap_32, past the 24 outfits lara_outfits.bin fills. */
+const GUNS_SLOT: Record<number, number> = { 1: 289, 2: 333 };
+const GUNS_OBJECT = 'lara_skin_swap_32';
+const CLASSIC_GUNS: Record<number, GunBlock[]> = {
+    1: [
+        { slot: 1, gun: 'pistols', kind: 'pistol' },
+        { slot: 2, gun: 'shotgun', kind: 'rifle' },
+        { slot: 3, gun: 'magnums', kind: 'pistol' },
+        { slot: 4, gun: 'uzis', kind: 'pistol' },
+    ],
+    2: [
+        { slot: 1, gun: 'pistols', kind: 'pistol' },
+        { slot: 4, gun: 'autos', kind: 'pistol' },
+        { slot: 5, gun: 'uzis', kind: 'pistol' },
+        { slot: 3, gun: 'shotgun', kind: 'rifle' },
+        { slot: 6, gun: 'm16', kind: 'rifle' },
+        { slot: 7, gun: 'grenade', kind: 'rifle' },
+        { slot: 8, gun: 'harpoon', kind: 'rifle' },
+        { slot: 9, gun: 'flare', kind: 'flare' },
+    ],
+};
+
+// Lara's meshes, as every one of her objects orders them.
+const THIGH_L = 1;
+const THIGH_R = 4;
+const TORSO = 7;
+const HAND_R = 10;
+const HAND_L = 13;
+
+/** Where each gun's meshes are in the guns object: Lara's own first, then each gun object's in turn. */
+function classicGunMap(blocks: GunBlock[]): AnyObj {
+    const map: AnyObj = { unarmed: { thigh_r: THIGH_R, thigh_l: THIGH_L } };
+    blocks.forEach((block, i) => {
+        const base = (i + 1) * LARA_MESHES;
+        if (block.kind === 'pistol') {
+            map[block.gun] = { hand_r: base + HAND_R, hand_l: base + HAND_L, thigh_r: base + THIGH_R, thigh_l: base + THIGH_L };
+        } else if (block.kind === 'rifle') {
+            map[block.gun] = { hand_r: base + HAND_R, torso: base + TORSO };
+        } else {
+            map[block.gun] = { hand_l: base + HAND_L };
+        }
+    });
+    return map;
+}
+
+/**
+ * The level file with the guns object added, or null when it has no Lara
+ * to take the meshes from, or the slot is taken. A gun the level has no
+ * object for draws as Lara's empty hands.
+ */
+function withGunsObject(data: Uint8Array, gameVersion: number): Uint8Array | null {
+    const slot = GUNS_SLOT[gameVersion];
+    const blocks = CLASSIC_GUNS[gameVersion];
+    const level = slot === undefined || blocks === undefined ? null : readLevelObjects(data);
+    if (level === null || level.objects.some((object) => object.id === slot)) return null;
+    const meshesOf = (id: number): number[] | null => {
+        const object = level.objects.find((candidate) => candidate.id === id && candidate.meshCount === LARA_MESHES);
+        return object ? Array.from({ length: LARA_MESHES }, (_, i) => object.firstMesh + i) : null;
+    };
+    const lara = meshesOf(0);
+    if (lara === null) return null;
+    const meshes = [...lara, ...blocks.flatMap((block) => meshesOf(block.slot) ?? lara)];
+    try {
+        return addMeshObject(data, level, slot, meshes);
+    } catch {
+        return null;
+    }
+}
 
 /**
  * Gives a game made for one of the engines before TRX the game flow and strings
@@ -417,10 +503,25 @@ export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersio
     // or none, shows Lara as her levels have her.
     const lists = [out.injections, ...levels.map((level) => level.injections), ...cutscenes.map((cutscene) => cutscene.injections)];
     const stockBraid = lists.some((list) => Array.isArray(list) && list.includes('braid.bin'));
-    if (stockBraid) {
+
+    // Her guns: each level she plays gets the object of its gun meshes.
+    let armed = 0;
+    for (const level of levels) {
+        if (level.type === 'dummy' || level.type === 'current' || typeof level.path !== 'string') continue;
+        const file = byPath.get(prefix + 'levels/' + level.path);
+        const changed = file ? withGunsObject(file.data, gameVersion) : null;
+        if (file && changed) {
+            file.data = changed;
+            armed++;
+        }
+    }
+
+    // TRX dresses her only where its outfit objects are, lara_outfits.bin.
+    if (stockBraid || armed > 0) {
         for (const list of [out.injections, ...levels.filter((level) => level.inherit_injections === false).map((level) => level.injections)]) {
             if (Array.isArray(list) && !list.includes('lara_outfits.bin')) list.push('lara_outfits.bin');
         }
+        write(prefix + 'gameflow.json5', out);
     }
     for (const file of injectLevelDefaultOutfit(modDir, gameVersion)) {
         const outfits = JSON.parse(new TextDecoder().decode(file.data)) as AnyObj;
@@ -428,6 +529,11 @@ export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersio
         if (isObject(own)) {
             if (stockBraid && Array.isArray(own.braid)) own.braid = own.braid.map((braid: AnyObj) => ({ ...braid, mode: 'none' }));
             else delete own.braid;
+            if (armed > 0 && Array.isArray(outfits.gun_maps)) {
+                outfits.gun_maps.push(classicGunMap(CLASSIC_GUNS[gameVersion]));
+                own.gun_map = outfits.gun_maps.length - 1;
+                own.guns_object = GUNS_OBJECT;
+            }
         }
         write(file.path, outfits);
     }
@@ -435,6 +541,7 @@ export function translateLegacy(mapped: MappedFile[], modDir: string, gameVersio
 
     const engine = ENGINE_NAMES.find(([pattern]) => pattern.test(source.path))?.[1] ?? 'TR1X';
     notes.push(`Made for ${engine}: gave its game flow and strings the shape TRX 1.0 reads, and kept Lara in the outfit her levels carry.`);
+    if (armed > 0) notes.push(`Gave Lara the guns her levels carry in ${armed} level${armed === 1 ? '' : 's'}, through her outfit, where TRX draws them now.`);
     if (lost > 0) notes.push(`Left out ${lost} flip map or mesh swap event${lost === 1 ? '' : 's'}, which TRX no longer has.`);
     write(prefix + LEGACY_MARKER, { engine, notes });
 

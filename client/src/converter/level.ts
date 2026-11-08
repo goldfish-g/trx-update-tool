@@ -245,3 +245,151 @@ export function clearEndLevelParameters(data: Uint8Array, level: LevelData): num
     }
     return changed;
 }
+
+// ---------------------------------------------------------------------------
+// Objects
+// ---------------------------------------------------------------------------
+
+export type LevelObject = {
+    id: number;
+    meshCount: number;
+    /** Index of its first mesh in the mesh pointer table. */
+    firstMesh: number;
+};
+
+/** Where a level keeps its objects' meshes, bones and records, for adding an object. */
+export type LevelObjects = {
+    meshPointers: number[];
+    /** Byte offsets of each table's count, and of the byte after its last record. */
+    meshPointersAt: number;
+    meshPointersEnd: number;
+    boneCount: number;
+    bonesAt: number;
+    bonesEnd: number;
+    objectsAt: number;
+    objectsEnd: number;
+    objects: LevelObject[];
+};
+
+/** The level's object records and the tables around them, or null for a file it cannot read. */
+export function readLevelObjects(data: Uint8Array): LevelObjects | null {
+    try {
+        const r = new Reader(data);
+        const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+        const game = gameOf(r.u32());
+        if (game === null) return null;
+        if (game === 1) {
+            r.arr32(TEXTURE_PAGE);
+        } else {
+            r.skip(1792);
+            r.arr32(TEXTURE_PAGE * 3);
+        }
+        r.skip(4);
+        const rooms = r.u16();
+        for (let i = 0; i < rooms; i++) {
+            r.skip(16);
+            r.arr32(2);
+            r.arr16(32);
+            const sizeZ = r.s16();
+            const sizeX = r.s16();
+            r.skip(sizeZ * sizeX * 8);
+            if (game === 1) {
+                r.skip(2);
+                r.arr16(18);
+                r.arr16(18);
+                r.skip(4);
+            } else if (game === 2) {
+                r.skip(6);
+                r.arr16(24);
+                r.arr16(20);
+                r.skip(4);
+            } else {
+                r.skip(4);
+                r.arr16(24);
+                r.arr16(20);
+                r.skip(7);
+            }
+        }
+        r.arr32(2); // floor data
+        r.arr32(2); // object meshes
+
+        const meshPointersAt = r.at;
+        const pointerCount = r.s32();
+        const meshPointers: number[] = [];
+        for (let i = 0; i < pointerCount; i++) meshPointers.push(r.u32());
+        const meshPointersEnd = r.at;
+
+        r.arr32(32); // animations
+        r.arr32(6); // animation changes
+        r.arr32(8); // animation ranges
+        r.arr32(2); // animation commands
+        const bonesAt = r.at;
+        const boneCount = r.arr32(4);
+        const bonesEnd = r.at;
+        r.arr32(2); // animation frames
+
+        const objectsAt = r.at;
+        const objectCount = r.s32();
+        const objects: LevelObject[] = [];
+        for (let i = 0; i < objectCount; i++) {
+            const at = r.at;
+            r.skip(18);
+            objects.push({ id: view.getUint32(at, true), meshCount: view.getUint16(at + 4, true), firstMesh: view.getUint16(at + 6, true) });
+        }
+        return {
+            meshPointers,
+            meshPointersAt,
+            meshPointersEnd,
+            boneCount,
+            bonesAt,
+            bonesEnd,
+            objectsAt,
+            objectsEnd: r.at,
+            objects,
+        };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The level with one more object, whose meshes are meshes the level already
+ * has, by their places in the mesh pointer table. It shares their geometry,
+ * so nothing is copied but the pointers; it has no animations, and bones
+ * that offset nothing.
+ */
+export function addMeshObject(data: Uint8Array, level: LevelObjects, id: number, meshes: number[]): Uint8Array {
+    if (meshes.length === 0 || level.meshPointers.length + meshes.length > 0xffff) throw new Error('too many meshes');
+    const pointers = new Uint8Array(meshes.length * 4);
+    const pointerView = new DataView(pointers.buffer);
+    meshes.forEach((mesh, i) => pointerView.setUint32(i * 4, level.meshPointers[mesh], true));
+    const bones = new Uint8Array((meshes.length - 1) * 16);
+    const record = new Uint8Array(18);
+    const recordView = new DataView(record.buffer);
+    recordView.setUint32(0, id, true);
+    recordView.setUint16(4, meshes.length, true);
+    recordView.setUint16(6, level.meshPointers.length, true);
+    recordView.setUint32(8, level.boneCount, true);
+    recordView.setUint32(12, 0, true);
+    recordView.setUint16(16, 0xffff, true);
+
+    const out = new Uint8Array(data.length + pointers.length + bones.length + record.length);
+    let at = 0;
+    const put = (part: Uint8Array) => {
+        out.set(part, at);
+        at += part.length;
+    };
+    put(data.subarray(0, level.meshPointersEnd));
+    put(pointers);
+    put(data.subarray(level.meshPointersEnd, level.bonesEnd));
+    put(bones);
+    put(data.subarray(level.bonesEnd, level.objectsEnd));
+    put(record);
+    put(data.subarray(level.objectsEnd));
+
+    const view = new DataView(out.buffer);
+    view.setInt32(level.meshPointersAt, level.meshPointers.length + meshes.length, true);
+    view.setInt32(level.bonesAt + pointers.length, level.boneCount + (meshes.length - 1) * 4, true);
+    view.setInt32(level.objectsAt + pointers.length + bones.length, level.objects.length + 1, true);
+    return out;
+}
