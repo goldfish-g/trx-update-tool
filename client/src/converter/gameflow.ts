@@ -2,7 +2,7 @@ import type { MappedFile } from './types.ts';
 import { parseJSON5 } from './json5.ts';
 import { parseTR2Script } from './tombpc.ts';
 import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
-import { translateLegacy } from './legacy.ts';
+import { cfgGameflow, translateLegacy } from './legacy.ts';
 import { currentInjectionName } from './stock.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,14 +99,7 @@ async function buildGameflow(
         const gfText = new TextDecoder().decode(gfEntry.data);
 
         if (gfText.indexOf('"PLACEHOLDER"') !== -1) {
-            let fullGfData: Uint8Array | null = null;
-            const fullGfPath = modPrefix + '_meta/fullgameflow.json5';
-            for (let fi = 0; fi < result.length; fi++) {
-                if (result[fi].path === fullGfPath) {
-                    fullGfData = result[fi].data;
-                    break;
-                }
-            }
+            const fullGfData = cfgGameflow(result, modDir)?.data ?? null;
             if (fullGfData) {
                 const fullText = new TextDecoder().decode(fullGfData);
                 const fullGf = parseJSON5(fullText) as AnyObj;

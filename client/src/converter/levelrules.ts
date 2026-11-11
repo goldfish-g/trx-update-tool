@@ -14,6 +14,7 @@
 
 import { BASE_FILES } from '../templates/base/index.ts';
 import { parseJSON5 } from './json5.ts';
+import { LEGACY_MARKER } from './legacy.ts';
 import { clearEndLevelParameters, readLevel, type LevelData } from './level.ts';
 import { parseTR2Script } from './tombpc.ts';
 import type { BaseGame } from './basegame.ts';
@@ -291,16 +292,21 @@ function tr3Rules(
 }
 
 function tr2Rules(s: Scripts, applies: (removedIn: number, classicOnly?: boolean) => boolean): void {
+    // TRX 1.1: monks were Lara's allies and the bandits their enemies, as
+    // tomb2.exe had them.
+    if (applies(1)) {
+        s.gameStart.push(
+            'for _, key in ipairs({ "monk_1", "monk_2", "monk_3" }) do',
+            '  if id(key) ~= nil then trx.creatures.add_ally(id(key)) end',
+            'end',
+            'for _, key in ipairs({ "bandit_1", "bandit_2" }) do',
+            '  if id(key) ~= nil then trx.creatures.add_ally_target(id(key)) end',
+            'end',
+        );
+    }
     if (!applies(0, true)) return;
-    // tomb2.exe made monks Lara's allies and the bandits their enemies.
     s.gameStart.push(
-        'for _, key in ipairs({ "monk_1", "monk_2", "monk_3" }) do',
-        '  if id(key) ~= nil then trx.creatures.add_ally(id(key)) end',
-        'end',
-        'for _, key in ipairs({ "bandit_1", "bandit_2" }) do',
-        '  if id(key) ~= nil then trx.creatures.add_ally_target(id(key)) end',
-        'end',
-        // It moved Bartoli half a block before the dragon.
+        // tomb2.exe moved Bartoli half a block before the dragon.
         'if not is_save and id("bartoli") ~= nil then',
         '  for _, item in ipairs(trx.items.query:of_object(id("bartoli")):matches()) do',
         '    local pos = item.pos',
@@ -333,6 +339,18 @@ function tr1Rules(s: Scripts, applies: (removedIn: number, classicOnly?: boolean
 
 export type LevelRules = { files: MappedFile[]; notes: string[] };
 
+/** Whether legacy.ts gave the game TRX's shape from a TR1X or TR2X game flow, which kept the original engines' rules. */
+function madeForEngineBeforeTRX(files: MappedFile[], prefix: string): boolean {
+    const marker = files.find((f) => f.path === prefix + LEGACY_MARKER);
+    if (!marker) return false;
+    try {
+        const doc = JSON.parse(decoder.decode(marker.data)) as { engine?: unknown };
+        return doc.engine !== 'TRX';
+    } catch {
+        return true;
+    }
+}
+
 /**
  * Writes the original engine's rules into the scripts of a game, for the
  * TRX release it was made for (null: a game built from the original data).
@@ -347,8 +365,7 @@ export function applyLevelRules(
     const prefix = `games/${modDir}/`;
     const notes: string[] = [];
     const tombpc = files.find((f) => f.path === prefix + 'tombpc.dat');
-    const legacy = files.some((f) => f.path === prefix + '_meta/fullgameflow.json5');
-    const classic = tombpc !== undefined || legacy;
+    const classic = tombpc !== undefined || madeForEngineBeforeTRX(files, prefix);
     const applies = (removedIn: number, classicOnly = false) =>
         classic || (!classicOnly && release !== null && release < removedIn);
 

@@ -7,6 +7,7 @@
 // here.
 
 import compatTemplate from './lua/trx_compat.lua?raw';
+import { archiveEngine, executableVersion, trxRelease } from './engine.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { luaObjectRenames } from './objects.ts';
@@ -139,44 +140,6 @@ export type ReleaseGuess = {
     from: string;
 };
 
-function findBytes(data: Uint8Array, needle: Uint8Array, from = 0): number {
-    const first = needle[0];
-    outer: for (let i = data.indexOf(first, from); i >= 0 && i <= data.length - needle.length; i = data.indexOf(first, i + 1)) {
-        for (let j = 1; j < needle.length; j++) {
-            if (data[i + j] !== needle[j]) continue outer;
-        }
-        return i;
-    }
-    return -1;
-}
-
-function utf16(text: string): Uint8Array {
-    const out = new Uint8Array(text.length * 2);
-    for (let i = 0; i < text.length; i++) out[i * 2] = text.charCodeAt(i);
-    return out;
-}
-
-/**
- * The version a Windows executable states in its version resource, such as
- * "TRX 1.11.1" or "TR1X 4.15.1", or null.
- */
-export function executableVersion(data: Uint8Array): string | null {
-    for (const field of ['ProductVersion', 'FileVersion']) {
-        const at = findBytes(data, utf16(field + '\0'));
-        if (at < 0) continue;
-        // The value follows, aligned to four bytes.
-        let i = at + (field.length + 1) * 2;
-        while (i < data.length - 1 && data[i] === 0 && data[i + 1] === 0) i += 2;
-        let value = '';
-        while (i < data.length - 1 && (data[i] !== 0 || data[i + 1] !== 0) && value.length < 64) {
-            value += String.fromCharCode(data[i] | (data[i + 1] << 8));
-            i += 2;
-        }
-        if (/\d+\.\d+/.test(value)) return value.trim();
-    }
-    return null;
-}
-
 // Script features by the last release that had them.
 const CODE_SIGNATURES: [RegExp, number][] = [
     [/\btrx\.events\.(on_level_init|on_level_start|on_level_load|on_control|on_control_post)\b/, 1],
@@ -227,23 +190,25 @@ const GAMEFLOW_SIGNATURES: [RegExp, number][] = [
  */
 export function detectRelease(upload: MappedFile[], mapped: MappedFile[]): ReleaseGuess {
     // A game made for the engines before TRX now has the shape of a TRX 1.0
-    // game (legacy.ts).
+    // game, and one made for TRX 1.0 to 1.4 the place of its files since
+    // 1.5 (legacy.ts). Its marker says which release that is.
     const legacy = mapped.find((f) => f.path.endsWith('/' + LEGACY_MARKER));
     if (legacy) {
-        const exe = upload.find((f) => f.path.toLowerCase().endsWith('.exe'));
-        const version = exe ? executableVersion(exe.data) : null;
-        return { release: 0, from: version ?? 'its game flow' };
+        let release = 0;
+        try {
+            const marker = JSON.parse(new TextDecoder().decode(legacy.data)) as { release?: unknown };
+            if (typeof marker.release === 'number') release = Math.min(marker.release, CURRENT_RELEASE);
+        } catch {
+            // The notes are only for the person converting; TRX 1.0 it is.
+        }
+        return { release, from: archiveEngine(upload) ?? 'its game flow' };
     }
     for (const entry of upload) {
         if (!entry.path.toLowerCase().endsWith('.exe')) continue;
         const version = executableVersion(entry.data);
         if (version === null) continue;
-        const trx = /^TRX\s+v?(\d+)\.(\d+)/i.exec(version);
-        if (trx) {
-            const major = +trx[1];
-            const minor = +trx[2];
-            return { release: major === 1 ? Math.min(minor, CURRENT_RELEASE) : CURRENT_RELEASE, from: version };
-        }
+        const release = trxRelease(version, CURRENT_RELEASE);
+        if (release !== null) return { release, from: version };
         if (/^(TR\dX|Tomb\dMain)\b/i.test(version)) return { release: null, from: version };
     }
 

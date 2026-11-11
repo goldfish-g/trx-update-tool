@@ -11,10 +11,12 @@
 // the levels' author made them. So she keeps wearing them, as the
 // converter's level_default outfit.
 
+import { recordedEngine, trxRelease } from './engine.ts';
 import { injectLevelDefaultOutfit, addOutfitLabel } from './gameflow.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_STRING_IDS } from './legacy.generated.ts';
 import { addMeshObject, readLevelObjects } from './level.ts';
+import { CURRENT_RELEASE } from './lua.ts';
 import { currentInjectionName, stockInjections } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
@@ -29,27 +31,94 @@ const ENGINE_NAMES: [RegExp, string][] = [
     [/\/tr2x_/i, 'TR2X'],
 ];
 
+/** How the notes name each engine, by the name its executable gives. */
+const EXECUTABLE_NAMES: Record<string, string> = {
+    trx: 'TRX',
+    tr1x: 'TR1X',
+    tr2x: 'TR2X',
+    tomb1main: 'Tomb1Main',
+    tomb2main: 'Tomb2Main',
+    tomb3main: 'Tomb3Main',
+};
+
 /** Where the file classifier keeps the legacy game flow and strings, inside the game's directory. */
 export const LEGACY_DIR = '_meta/legacy/';
-/** Left by the translation, so the migration knows the game now has TRX 1.0's shape. */
+/** Left by the translation, so the migration knows the game now has TRX 1.0's shape, or the release it was made for. */
 export const LEGACY_MARKER = '_meta/legacy.json';
 
 const LEGACY_FILE = /^cfg\/((?:tomb[123]main|tr1x|tr2x)_(?:gameflow|strings)[^/]*\.json5)$/;
+// TR1X 4.14, TR2X 1.4 and TRX up to 1.4 kept them in a directory of the
+// game's own in cfg/, beside the ones of the games they shipped with.
+const CFG_GAME_FILE = /^cfg\/(tr\d)\/((?:gameflow|strings)[^/]*\.json5)$/;
 
 /** Where a legacy game flow or strings file goes, or null for any other file. */
 export function legacyPath(lowerRelPath: string): string | null {
     const m = LEGACY_FILE.exec(lowerRelPath);
-    return m ? LEGACY_DIR + m[1] : null;
+    if (m) return LEGACY_DIR + m[1];
+    const cfg = CFG_GAME_FILE.exec(lowerRelPath);
+    return cfg ? `${LEGACY_DIR}${cfg[1]}/${cfg[2]}` : null;
 }
 
-/** The game flow of the game itself, not of the expansions or demos those engines shipped beside it. */
-function findLegacy(files: MappedFile[], prefix: string, kind: 'gameflow' | 'strings', language = ''): MappedFile | undefined {
-    const wanted = new RegExp(`^${prefix}${LEGACY_DIR}(?:tomb[123]main|tr1x|tr2x)_${kind}${language}\\.json5$`);
-    return files.find((file) => wanted.test(file.path));
+/** A game's flow and strings, as the engine it was made for read them. */
+type LegacySource = {
+    gameflow: MappedFile;
+    /** Its strings files, by their names (strings.json5, strings-de.json5). */
+    strings: Map<string, MappedFile>;
+    /** Whether they come from cfg/<game>/, where the later releases kept them. */
+    cfgLayout: boolean;
+};
+
+/**
+ * The game flow of the game itself, not of the expansions or demos those
+ * engines shipped beside it. One in cfg/<game>/ wins: an engine that read
+ * that one never read the older name, which an upgraded game may still carry.
+ */
+function findLegacy(files: MappedFile[], prefix: string): LegacySource | null {
+    const dir = prefix + LEGACY_DIR;
+    const cfg = files.find((file) => new RegExp(`^${dir}tr\\d/gameflow\\.json5$`).test(file.path));
+    const strings = new Map<string, MappedFile>();
+    if (cfg) {
+        const at = cfg.path.slice(0, cfg.path.length - 'gameflow.json5'.length);
+        for (const file of files) {
+            const name = file.path.startsWith(at) ? file.path.slice(at.length) : '';
+            if (/^strings(?:-[\w-]+)?\.json5$/.test(name)) strings.set(name, file);
+        }
+        return { gameflow: cfg, strings, cfgLayout: true };
+    }
+    const flat = files.find((file) => new RegExp(`^${dir}(?:tomb[123]main|tr1x|tr2x)_gameflow\\.json5$`).test(file.path));
+    if (!flat) return null;
+    const own = files.find((file) => new RegExp(`^${dir}(?:tomb[123]main|tr1x|tr2x)_strings\\.json5$`).test(file.path));
+    if (own) strings.set('strings.json5', own);
+    return { gameflow: flat, strings, cfgLayout: false };
 }
 
 export function hasLegacyGameflow(files: MappedFile[], modDir: string): boolean {
-    return findLegacy(files, `games/${modDir}/`, 'gameflow') !== undefined;
+    return findLegacy(files, `games/${modDir}/`) !== null;
+}
+
+/** The game flow a game kept in cfg/<game>/, if it has one. */
+export function cfgGameflow(files: MappedFile[], modDir: string): MappedFile | undefined {
+    const source = findLegacy(files, `games/${modDir}/`);
+    return source?.cfgLayout ? source.gameflow : undefined;
+}
+
+/**
+ * The engine a game was made for: its executable's name for itself, or else
+ * what its files say. TRX 1.0 to 1.4 shipped the catalogs of the game in
+ * cfg/, which the engines before it did not have.
+ */
+function legacyEngine(files: MappedFile[], prefix: string, source: LegacySource): { name: string; version: string | null; release: number | null } {
+    const version = recordedEngine(files, prefix);
+    const named = version === null ? null : /^(TRX|TR\dX|Tomb\dMain)\b/i.exec(version);
+    if (version !== null && named) {
+        const release = trxRelease(version, CURRENT_RELEASE);
+        return { name: EXECUTABLE_NAMES[named[1].toLowerCase()] ?? named[1], version, release };
+    }
+    if (source.cfgLayout && files.some((file) => /^catalog_[a-z_]+\.csv$/.test(file.path.slice(prefix.length)))) {
+        return { name: 'TRX', version, release: 0 };
+    }
+    const byName = ENGINE_NAMES.find(([pattern]) => pattern.test(source.gameflow.path))?.[1] ?? 'TR1X';
+    return { name: source.cfgLayout && source.gameflow.path.includes('/tr2/') ? 'TR2X' : byName, version, release: null };
 }
 
 function isObject(value: unknown): value is AnyObj {
@@ -264,52 +333,15 @@ function withGunsObject(data: Uint8Array, gameVersion: number): Uint8Array | nul
 }
 
 /**
- * Gives a game made for one of the engines before TRX the game flow and strings
- * files of a TRX 1.0 game, in games/<mod>/. Returns null when it has no
- * legacy game flow, or one that cannot be read.
+ * The name TRX knows an injection by: no directory and its current name,
+ * with the game's own file moved under injections/, where TRX looks for it
+ * now. A copy of one of TRX's own files goes by the name TRX shipped it
+ * under, whatever the game named it, so the game gets the one the current
+ * TRX ships.
  */
-export async function translateLegacy(mapped: MappedFile[], modDir: string, gameVersion: number, modTitle: string): Promise<LegacyResult | null> {
-    const prefix = `games/${modDir}/`;
-    const source = findLegacy(mapped, prefix, 'gameflow');
-    if (!source) return null;
-    let old: AnyObj;
-    try {
-        old = parseJSON5(new TextDecoder().decode(source.data)) as AnyObj;
-    } catch {
-        return null;
-    }
-    if (!isObject(old) || !Array.isArray(old.levels)) return null;
-
-    const files = mapped.slice();
-    const notes: string[] = [];
-    const encoder = new TextEncoder();
-    const byPath = new Map(files.map((file) => [file.path, file]));
-
-    // The strings: TR1X 4.8 to 4.13 kept them in a file of their own, the
-    // releases before in the game flow.
-    const strings: Strings = { levels: [], cutscenes: [], objects: {}, game_strings: {} };
-    const ownStrings = findLegacy(files, prefix, 'strings');
-    let levelStrings: AnyObj[] = [];
-    if (ownStrings) {
-        try {
-            const doc = parseJSON5(new TextDecoder().decode(ownStrings.data)) as AnyObj;
-            if (Array.isArray(doc.levels)) levelStrings = doc.levels;
-            if (isObject(doc.objects)) Object.assign(strings.objects, doc.objects);
-            addFlatStrings(doc.game_strings, strings.objects, strings.game_strings);
-        } catch {
-            notes.push('Could not read the game’s strings file, so its levels keep their file names.');
-        }
-    }
-    addFlatStrings(old.strings, strings.objects, strings.game_strings);
-    addFlatStrings(old.game_strings, strings.objects, strings.game_strings);
-
-    // Injections: no directory, TRX's current name, and the game's own
-    // files under injections/, where TRX looks for them now. A copy of one
-    // of TRX's own files goes by the name TRX shipped it under, whatever
-    // the game named it, so the game gets the one the current TRX ships.
-    const stockNames = await stockInjections(files, prefix, gameVersion);
+function injectionNamer(prefix: string, byPath: Map<string, MappedFile>, stockNames: Map<MappedFile, string>): (path: unknown) => string | null {
     const injectionNames = new Map<string, string>();
-    const injection = (path: unknown): string | null => {
+    return (path) => {
         if (typeof path !== 'string' || !path) return null;
         const own = baseName(path);
         const known = injectionNames.get(own);
@@ -328,6 +360,53 @@ export async function translateLegacy(mapped: MappedFile[], modDir: string, game
         injectionNames.set(own, name);
         return name;
     };
+}
+
+/**
+ * Gives a game made for one of the engines before TRX the game flow and strings
+ * files of a TRX 1.0 game, in games/<mod>/, and one made for TRX 1.0 to 1.4
+ * the place TRX keeps them in now. Returns null when it has no such game
+ * flow, or one that cannot be read.
+ */
+export async function translateLegacy(mapped: MappedFile[], modDir: string, gameVersion: number, modTitle: string): Promise<LegacyResult | null> {
+    const prefix = `games/${modDir}/`;
+    const source = findLegacy(mapped, prefix);
+    if (!source) return null;
+    let old: AnyObj;
+    try {
+        old = parseJSON5(new TextDecoder().decode(source.gameflow.data)) as AnyObj;
+    } catch {
+        return null;
+    }
+    if (!isObject(old) || !Array.isArray(old.levels)) return null;
+    const engine = legacyEngine(mapped, prefix, source);
+    if (engine.release !== null) return moveTRXGame(mapped, modDir, gameVersion, modTitle, source, old, { ...engine, release: engine.release });
+
+    const files = mapped.slice();
+    const notes: string[] = [];
+    const encoder = new TextEncoder();
+    const byPath = new Map(files.map((file) => [file.path, file]));
+
+    // The strings: TR1X 4.8 to 4.13 kept them in a file of their own, the
+    // releases before in the game flow.
+    const strings: Strings = { levels: [], cutscenes: [], objects: {}, game_strings: {} };
+    const ownStrings = source.strings.get('strings.json5');
+    let levelStrings: AnyObj[] = [];
+    if (ownStrings) {
+        try {
+            const doc = parseJSON5(new TextDecoder().decode(ownStrings.data)) as AnyObj;
+            if (Array.isArray(doc.levels)) levelStrings = doc.levels;
+            if (isObject(doc.objects)) Object.assign(strings.objects, doc.objects);
+            addFlatStrings(doc.game_strings, strings.objects, strings.game_strings);
+        } catch {
+            notes.push('Could not read the game’s strings file, so its levels keep their file names.');
+        }
+    }
+    addFlatStrings(old.strings, strings.objects, strings.game_strings);
+    addFlatStrings(old.game_strings, strings.objects, strings.game_strings);
+
+    const stockNames = await stockInjections(files, prefix, gameVersion);
+    const injection = injectionNamer(prefix, byPath, stockNames);
     const injections = (list: unknown): string[] | undefined =>
         Array.isArray(list) ? list.map(injection).filter((name): name is string => name !== null) : undefined;
 
@@ -523,7 +602,25 @@ export async function translateLegacy(mapped: MappedFile[], modDir: string, game
     if (Object.keys(strings.objects).length > 0) doc.objects = strings.objects;
     if (Object.keys(strings.game_strings).length > 0) doc.game_strings = strings.game_strings;
 
-    const write = (path: string, value: unknown) => {
+    const write = writer(files, byPath, encoder);
+    write(prefix + 'gameflow.json5', out);
+    write(prefix + 'strings.json5', doc);
+    const armed = dressAsLevels(files, byPath, write, out, modDir, gameVersion);
+
+    notes.push(`Made for ${engine.version ?? engine.name}: gave its game flow and strings the shape TRX 1.0 reads, and kept Lara in the outfit her levels carry.`);
+    if (armed > 0) notes.push(`Gave Lara the guns her levels carry in ${armed} level${armed === 1 ? '' : 's'}, through her outfit, where TRX draws them now.`);
+    if (lost > 0) notes.push(`Left out ${lost} flip map or mesh swap event${lost === 1 ? '' : 's'}, which TRX no longer has.`);
+    write(prefix + LEGACY_MARKER, { engine: engine.name, notes });
+
+    // What is left of the legacy files is the converter's working copy.
+    return { files: files.filter((file) => !file.path.startsWith(prefix + LEGACY_DIR)), notes };
+}
+
+type Write = (path: string, value: unknown) => void;
+
+/** Writes a file as JSON into the game's files, in place of one at that path. */
+function writer(files: MappedFile[], byPath: Map<string, MappedFile>, encoder: TextEncoder): Write {
+    return (path, value) => {
         const data = encoder.encode(JSON.stringify(value, null, 4));
         const existing = byPath.get(path);
         if (existing) existing.data = data;
@@ -533,8 +630,18 @@ export async function translateLegacy(mapped: MappedFile[], modDir: string, game
             byPath.set(path, file);
         }
     };
-    write(prefix + 'gameflow.json5', out);
-    write(prefix + 'strings.json5', doc);
+}
+
+/**
+ * Dresses Lara in what her levels carry, for a game made for an engine
+ * without outfits, as the level_default outfit its levels and cutscenes
+ * already name: her braid, and her guns through the outfit. Returns how many
+ * levels got the object of their gun meshes.
+ */
+function dressAsLevels(files: MappedFile[], byPath: Map<string, MappedFile>, write: Write, out: AnyObj, modDir: string, gameVersion: number): number {
+    const prefix = `games/${modDir}/`;
+    const levels: AnyObj[] = Array.isArray(out.levels) ? out.levels : [];
+    const cutscenes: AnyObj[] = Array.isArray(out.cutscenes) ? out.cutscenes : [];
     // Lara's braid. TRX draws it from meshes of its own in lara_outfits.bin,
     // where those engines took the braid object of braid.bin. A game that
     // injected TR1X's own braid.bin gets TRX's braid, drawn on Lara's own head
@@ -577,13 +684,114 @@ export async function translateLegacy(mapped: MappedFile[], modDir: string, game
         write(file.path, outfits);
     }
     addOutfitLabel(files, modDir);
+    return armed;
+}
 
-    const engine = ENGINE_NAMES.find(([pattern]) => pattern.test(source.path))?.[1] ?? 'TR1X';
-    notes.push(`Made for ${engine}: gave its game flow and strings the shape TRX 1.0 reads, and kept Lara in the outfit her levels carry.`);
+/** The keys of a TRX 1.0 game flow that name a file. */
+const FILE_KEYS = new Set(['path', 'background_path', 'main_menu_picture', 'sfx_path']);
+
+/**
+ * Gives a game made for TRX 1.0 to 1.4, or a build before 1.0, the place of
+ * its files that TRX has had since 1.5: its game flow and strings in its own
+ * directory rather than cfg/<game>/, and every file it names by the name
+ * TRX looks up there, rather than by its path from TRX's directory. What
+ * those releases read is otherwise left as it was, for the migration to
+ * bring from the release the game was made for (its marker says which).
+ * TRX dressed Lara in outfits from 1.2; a game made before wears what her
+ * levels carry, as she did.
+ */
+async function moveTRXGame(
+    mapped: MappedFile[],
+    modDir: string,
+    gameVersion: number,
+    modTitle: string,
+    source: LegacySource,
+    old: AnyObj,
+    engine: { name: string; version: string | null; release: number },
+): Promise<LegacyResult> {
+    const prefix = `games/${modDir}/`;
+    const files = mapped.slice();
+    const byPath = new Map(files.map((file) => [file.path, file]));
+    const encoder = new TextEncoder();
+    const write = writer(files, byPath, encoder);
+    const notes: string[] = [];
+
+    const stockNames = await stockInjections(files, prefix, gameVersion);
+    const injection = injectionNamer(prefix, byPath, stockNames);
+    const injections = (list: unknown): string[] | undefined =>
+        Array.isArray(list) ? list.map(injection).filter((name): name is string => name !== null) : undefined;
+
+    const out: AnyObj = {};
+    for (const [key, value] of Object.entries(old)) {
+        if (DROPPED.includes(key) || TO_ENFORCED.includes(key)) continue;
+        out[key] = value;
+    }
+    // A build before TRX 1.0 still had some of the settings 1.0 made the
+    // player's.
+    const enforced: AnyObj = isObject(old.enforced_config) ? { ...old.enforced_config } : {};
+    for (const key of TO_ENFORCED) {
+        if (old[key] !== undefined) enforced[key] ??= old[key];
+    }
+    if (Object.keys(enforced).length > 0) out.enforced_config = enforced;
+
+    // Files by name, as the file classifier placed them: lower case, with no
+    // directory.
+    let named = 0;
+    const walk = (node: unknown): void => {
+        if (Array.isArray(node)) {
+            node.forEach(walk);
+        } else if (isObject(node)) {
+            for (const [key, value] of Object.entries(node)) {
+                if (key === 'enforced_config') continue;
+                if (key === 'injections' && Array.isArray(value)) {
+                    node[key] = injections(value);
+                } else if (FILE_KEYS.has(key) && typeof value === 'string') {
+                    const name = baseName(value);
+                    if (name !== value) named++;
+                    node[key] = name;
+                } else {
+                    walk(value);
+                }
+            }
+        }
+    };
+    walk(out);
+    const laraInjections = LARA_INJECTIONS[gameVersion] ?? [];
+    const own = Array.isArray(out.injections) ? out.injections as string[] : [];
+    out.injections = [...own, ...laraInjections.filter((name) => !own.includes(name))];
+
+    const levels: AnyObj[] = Array.isArray(out.levels) ? out.levels : [];
+    const cutscenes: AnyObj[] = Array.isArray(out.cutscenes) ? out.cutscenes : [];
+    const dressed = engine.release < 2;
+    if (dressed) {
+        for (const entry of [...levels, ...cutscenes]) {
+            if (isObject(entry) && entry.type !== 'dummy' && entry.type !== 'current') entry.lara_outfit ??= 'level_default';
+        }
+    }
+    out.engine = gameVersion;
+    out.extends = `tr${gameVersion}`;
+    if (modTitle) out.name = modTitle;
+    write(prefix + 'gameflow.json5', out);
+
+    // Its strings, as that release read them.
+    for (const [name, file] of source.strings) {
+        const to = prefix + name;
+        if (byPath.has(to)) continue;
+        const copy = { path: to, data: file.data };
+        files.push(copy);
+        byPath.set(to, copy);
+    }
+    if (!byPath.has(prefix + 'strings.json5')) {
+        write(prefix + 'strings.json5', { levels: levels.map((level) => ({ title: typeof level.path === 'string' ? level.path.replace(/\.[^.]+$/, '') : 'Level' })) });
+    }
+
+    const armed = dressed ? dressAsLevels(files, byPath, write, out, modDir, gameVersion) : 0;
+
+    const release = `TRX 1.${engine.release}`;
+    const made = engine.version !== null && !engine.version.startsWith(release) ? `${release} (${engine.version})` : release;
+    notes.push(`Made for ${made}: moved its game flow, strings and data files from cfg/ into its own directory${named > 0 ? `, and named ${named} file${named === 1 ? '' : 's'} the way TRX looks them up now` : ''}.`);
+    if (dressed) notes.push('Kept Lara in the outfit her levels carry, as TRX dressed her before 1.2.');
     if (armed > 0) notes.push(`Gave Lara the guns her levels carry in ${armed} level${armed === 1 ? '' : 's'}, through her outfit, where TRX draws them now.`);
-    if (lost > 0) notes.push(`Left out ${lost} flip map or mesh swap event${lost === 1 ? '' : 's'}, which TRX no longer has.`);
-    write(prefix + LEGACY_MARKER, { engine, notes });
-
-    // What is left of the legacy files is the converter's working copy.
+    write(prefix + LEGACY_MARKER, { engine: engine.name, release: engine.release, notes });
     return { files: files.filter((file) => !file.path.startsWith(prefix + LEGACY_DIR)), notes };
 }

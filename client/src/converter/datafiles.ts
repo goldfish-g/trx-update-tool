@@ -108,6 +108,78 @@ function levelKey(path: unknown): string {
     return typeof path === 'string' ? baseName(path).replace(/\.[^.]+$/, '') : '';
 }
 
+/** A setting's current name and value, for each one it became: none where the old value means the default. */
+type SettingRename = (value: unknown) => [string, unknown][];
+
+const onOff = (key: string, on: unknown, off: unknown): SettingRename =>
+    (value) => (value === true ? [[key, on]] : value === false ? [[key, off]] : []);
+const same = (...keys: string[]): SettingRename =>
+    (value) => keys.map((key) => [key, value] as [string, unknown]);
+
+/**
+ * Settings by the names TR1X, TR2X and TRX before 1.12 gave them, and what
+ * they became (TRX's config/legacy.c, and the readers of older names that
+ * TRX 1.10 removed in "config: drop the migrations for 1.4 and older").
+ */
+const RENAMED_SETTINGS: Record<string, SettingRename> = {
+    enable_game_modes: onOff('game_modes_policy', 'always', 'never'),
+    enable_loading_screens: onOff('loading_screens', 'always', 'disabled'),
+    load_current_music: onOff('music_load_condition', 'non-ambient', 'never'),
+    enable_cine: same('enable_cutscenes'),
+    enable_eidos_logo: same('enable_legal'),
+    walk_to_items: same('enable_walk_to_items'),
+    enabled_inverted_look: same('enable_inverted_look'),
+    fix_wall_jump_glitch: (value) => (value === true ? [['wall_glitch_mode', 'fixed']] : []),
+    enable_enhanced_look: onOff('look_mode', 'unrestricted', 'restricted'),
+    enable_barefoot_sfx: same('enable_ps1_sfx'),
+    enable_ps_uzi_sfx: same('enable_ps1_sfx'),
+    fix_tihocan_secret_sound: same('fix_chainblock_secret_sound'),
+    enable_buffering: same('enable_buffering_inventory', 'enable_buffering_func_keys'),
+    revert_to_pistols: onOff('remember_gun_status', false, true),
+    fix_pickup_drift_glitch: (value) => (value === false ? [['fix_lara_pickup_embed', false]] : []),
+    brightness: same('game_brightness', 'ui_brightness'),
+    enable_round_shadow: onOff('shadow_type', 'circle', 'octagon'),
+    fix_glide_cameras: same('enable_glide_cameras'),
+    enable_sunglasses: onOff('sunglasses_mode', 'opaque', 'off'),
+    enable_target_change: onOff('target_change_mode', 'enhanced', 'off'),
+    enable_breeze: (value) => (value === false ? [['breeze_mode', 'off']] : []),
+    enable_save_crystals: (value) => (value === true ? [['save_crystal_mode', 'save']] : []),
+    enable_neutral_twists: same('enable_alternative_turns'),
+    enable_dithering: onOff('dither_mode', 'software-renderer', 'disabled'),
+    enable_vertex_snap: onOff('vertex_snap_mode', '320x240', 'disabled'),
+    enable_responsive_mesh_tint: onOff('water_tint_mode', 'responsive', 'whole'),
+    enable_braid: onOff('braid_status', 'on', 'off'),
+};
+
+/**
+ * Gives the settings a game flow enforces and hides their current names,
+ * keeping any it already gives by those. Returns how many it renamed.
+ */
+function renameSettings(gameflow: AnyObj): number {
+    let renamed = 0;
+    const enforced = gameflow.enforced_config;
+    if (isObject(enforced)) {
+        for (const [key, value] of Object.entries(enforced)) {
+            const rename = RENAMED_SETTINGS[key];
+            if (!rename) continue;
+            for (const [now, to] of rename(value)) {
+                if (!(now in enforced)) enforced[now] = to;
+            }
+            delete enforced[key];
+            renamed++;
+        }
+    }
+    if (Array.isArray(gameflow.hidden_config)) {
+        const names: unknown[] = gameflow.hidden_config.flatMap((name: unknown) => {
+            if (typeof name !== 'string' || !RENAMED_SETTINGS[name]) return [name];
+            const now = RENAMED_SETTINGS[name](true).map(([key]) => key);
+            return now.length > 0 ? now : RENAMED_SETTINGS[name](false).map(([key]) => key);
+        });
+        gameflow.hidden_config = names.filter((name, i) => names.indexOf(name) === i);
+    }
+    return renamed;
+}
+
 function migrateGameflow(
     gameflow: AnyObj,
     release: number,
@@ -115,7 +187,9 @@ function migrateGameflow(
     scripts: LevelScripts,
     notes: string[],
 ): void {
-    // Paths: TRX 1.0 named files from its own directory.
+    // Paths: TRX 1.0 named files from its own directory. The file classifier
+    // gave every file a lower-case name, and the engine's file system tells
+    // the cases apart.
     let paths = 0;
     const walkPaths = (node: unknown): void => {
         if (Array.isArray(node)) {
@@ -124,7 +198,7 @@ function migrateGameflow(
             for (const key of Object.keys(node)) {
                 const value = node[key];
                 if (typeof value === 'string' && /^data[/\\]/i.test(value)) {
-                    node[key] = value.split(/[/\\]/).pop();
+                    node[key] = value.split(/[/\\]/).pop()!.toLowerCase();
                     paths++;
                 } else {
                     walkPaths(value);
@@ -174,13 +248,19 @@ function migrateGameflow(
     }
     delete gameflow.savegame_fmt_legacy;
 
-    // TRX 1.9: game modes became a policy.
-    for (const section of [gameflow, gameflow.enforced_config]) {
-        if (isObject(section) && typeof section.enable_game_modes === 'boolean') {
-            section.game_modes_policy = section.enable_game_modes ? 'always' : 'never';
-            delete section.enable_game_modes;
-        }
+    // TRX 1.9: game modes became a policy, which older game flows also gave
+    // outside the enforced settings.
+    if (typeof gameflow.enable_game_modes === 'boolean') {
+        gameflow.game_modes_policy = gameflow.enable_game_modes ? 'always' : 'never';
+        delete gameflow.enable_game_modes;
     }
+
+    // Settings a game enforces by the names they had before. TRX reads the
+    // old names only from the player's own settings, and from those of TRX
+    // 1.4 and older not at all, so an enforced one is lost unless it takes
+    // its current name.
+    const renamed = renameSettings(gameflow);
+    if (renamed > 0) notes.push(`Gave ${renamed} enforced setting${renamed === 1 ? '' : 's'} the name${renamed === 1 ? '' : 's'} TRX knows ${renamed === 1 ? 'it' : 'them'} by now.`);
 
     // Objects named in sequences and item drops.
     const walkObjects = (node: unknown): void => {

@@ -1,5 +1,6 @@
 import { unzipSync, gunzipSync } from 'fflate';
 import { GOLD_MARKER } from './basegame.ts';
+import { archiveEngine, ENGINE_FILE } from './engine.ts';
 import { legacyPath } from './legacy.ts';
 import { levelFileGame } from './level.ts';
 import { decodeLzma } from './lzma.ts';
@@ -193,7 +194,15 @@ function detectRoot(entries: MappedFile[]): string {
     return bestRoot;
 }
 
-function classifyFile(lowerPath: string, _originalRelPath: string, modId: string): string | null {
+/** What the whole archive holds, which decides where some of its files go. */
+type ArchiveShape = {
+    /** It has a game laid out for TRX 1.5 or later, in games/<mod>/. */
+    laidOutArchive: boolean;
+    /** It has the game flow of a game of its own, for TR1X, TR2X or TRX up to 1.4. */
+    ownGameflow: boolean;
+};
+
+function classifyFile(lowerPath: string, _originalRelPath: string, modId: string, { laidOutArchive, ownGameflow }: ArchiveShape): string | null {
     const ext = getExt(lowerPath);
     const lowerBase = lowerPath.split('/').pop()!;
     const prefix = 'games/' + modId + '/';
@@ -247,14 +256,21 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
         return prefix + 'audio/' + lowerBase;
     }
 
-    if (ext === '.json5'
-        && (lowerPath.indexOf('/') === -1
-            || /^cfg\/tr\d-level\//.test(lowerPath))) {
+    if (ext === '.json5' && lowerPath.indexOf('/') === -1) {
         return prefix + lowerBase;
     }
-    if (ext === '.json5' && lowerBase === 'gameflow.json5'
-        && /^cfg\/tr\d\//.test(lowerPath)) {
-        return prefix + '_meta/fullgameflow.json5';
+    // TRX's game for lone level files, which a game may have made its own.
+    // Beside a game flow of the game's own it is the copy the engine shipped
+    // with, as TR1X 4.15 and TRX 1.0 to 1.4 shipped it.
+    if (ext === '.json5' && /^cfg\/tr\d-level\//.test(lowerPath)) {
+        return ownGameflow ? null : prefix + lowerBase;
+    }
+    // TRX 1.0 to 1.4 kept a game's catalogs, weapons and inventory ring in
+    // cfg/, where they now go in its own directory. A game laid out for a
+    // later TRX keeps the ones it has there.
+    const cfgData = /^cfg\/(catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5)$/.exec(lowerPath);
+    if (cfgData) {
+        return laidOutArchive ? null : prefix + cfgData[1];
     }
     // The outfits the engine the game shipped with read, which its levels may
     // have been built against.
@@ -295,6 +311,10 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     // and pixg/, in place of data/ and pix/. A game laid out that way is the
     // expansion, and those are its files.
     const gold = entries.some((e) => /^datag\//i.test(relativePath(e.path, root)));
+    const shape: ArchiveShape = {
+        laidOutArchive: entries.some((e) => /^games\/[^/]+\/gameflow\.json5$/i.test(relativePath(e.path, root))),
+        ownGameflow: entries.some((e) => /^cfg\/(?:tr\d\/gameflow|(?:tomb[123]main|tr1x|tr2x)_gameflow)\.json5$/i.test(relativePath(e.path, root))),
+    };
 
     const mapped: MappedFile[] = [];
     const depths: number[] = [];
@@ -311,7 +331,7 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
 
         if (!relPath || data.byteLength === 0) continue;
 
-        const vfsPath = classifyFile(lowerPath, relPath, modId);
+        const vfsPath = classifyFile(lowerPath, relPath, modId, shape);
         if (vfsPath) {
             mapped.push({ path: vfsPath, data: data });
             depths.push(relPath.split('/').length);
@@ -327,6 +347,11 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     }
     const out = mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
     if (gold) out.push({ path: `games/${modId}/${GOLD_MARKER}`, data: new Uint8Array([1]) });
+    // Which engine the game shipped with, which tells how to read its files.
+    const engine = archiveEngine(entries);
+    if (engine !== null) {
+        out.push({ path: `games/${modId}/${ENGINE_FILE}`, data: new TextEncoder().encode(JSON.stringify({ version: engine })) });
+    }
     return out;
 }
 
