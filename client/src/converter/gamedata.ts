@@ -4,6 +4,7 @@ import { archiveEngine, ENGINE_FILE } from './engine.ts';
 import { legacyPath } from './legacy.ts';
 import { levelFileGame } from './level.ts';
 import { decodeLzma } from './lzma.ts';
+import { parseTR2Script } from './tombpc.ts';
 import type { GameVersion, MappedFile, Language } from './types.ts';
 
 const LEVEL_EXTS = ['.phd', '.tr2', '.psx', '.tub'];
@@ -272,6 +273,11 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     if (cfgData) {
         return laidOutArchive ? null : prefix + cfgData[1];
     }
+    // A catalog beside the game flow: the game's own directory, taken for
+    // the archive's root when it holds its music too.
+    if (/^catalog_[a-z_]+\.csv$/.test(lowerPath)) {
+        return prefix + lowerBase;
+    }
     // The outfits the engine the game shipped with read, which its levels may
     // have been built against.
     if (lowerPath === 'cfg/outfits.json5') {
@@ -330,6 +336,9 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const lowerPath = relPath.toLowerCase();
 
         if (!relPath || data.byteLength === 0) continue;
+        // What a Mac adds when it packs an archive: a ._ twin of each file
+        // with its metadata, and the __MACOSX directory holding them.
+        if (/(^|\/)__macosx\//.test(lowerPath) || /(^|\/)\._[^/]*$/.test(lowerPath)) continue;
 
         const vfsPath = classifyFile(lowerPath, relPath, modId, shape);
         if (vfsPath) {
@@ -344,6 +353,28 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     for (let i = 0; i < mapped.length; i++) {
         const seen = nearest[mapped[i].path];
         if (seen === undefined || depths[i] < depths[seen]) nearest[mapped[i].path] = i;
+    }
+    // A script, though, is the one that names the levels the archive brings:
+    // an archive can carry a stray one, from another game or a template.
+    const scriptPath = `games/${modId}/tombpc.dat`;
+    const scripts = mapped.map((_file, i) => i).filter((i) => mapped[i].path === scriptPath);
+    if (scripts.length > 1) {
+        const levels = new Set(mapped.filter((f) => /\/levels\/[^/]+$/.test(f.path)).map((f) => f.path.slice(f.path.lastIndexOf('/') + 1).toLowerCase()));
+        const named = (i: number): number => {
+            let best = 0;
+            for (const game of [2, 3]) {
+                try {
+                    const info = parseTR2Script(mapped[i].data, game);
+                    const count = info ? info.filenames.filter((name) => levels.has(name.replace(/\\/g, '/').split('/').pop()!.toLowerCase())).length : 0;
+                    best = Math.max(best, count);
+                } catch {
+                    // Not a script of that game.
+                }
+            }
+            return best;
+        };
+        const scores = new Map(scripts.map((i) => [i, named(i)]));
+        nearest[scriptPath] = scripts.reduce((a, b) => (scores.get(b)! > scores.get(a)! || (scores.get(b) === scores.get(a) && depths[b] < depths[a]) ? b : a));
     }
     const out = mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
     if (gold) out.push({ path: `games/${modId}/${GOLD_MARKER}`, data: new Uint8Array([1]) });

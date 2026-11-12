@@ -7,7 +7,9 @@
 // ships; a file the builder changed is merged into the current one, so it
 // keeps both the builder's changes and what TRX has added since.
 
-import { BASE_FILES, BASE_INJECTIONS } from '../templates/base/index.ts';
+import { BASE_FILES, BASE_INJECTIONS, OBJECT_NAMES } from '../templates/base/index.ts';
+import { getTemplate } from '../templates/index.ts';
+import { readLevelObjects, renumberObject } from './level.ts';
 import { GAME_STRING_IDS } from './history.generated.ts';
 import { parseJSON5 } from './json5.ts';
 import { CURRENT_RELEASE, currentMarkup } from './lua.ts';
@@ -247,6 +249,14 @@ function migrateGameflow(
         delete gameflow.savegame_fmt_bson;
     }
     delete gameflow.savegame_fmt_legacy;
+    // Tomb1Main named its ATI-format saves; TRX reads no game flow without
+    // a pattern of its own ("key does not exist: savegame_file_fmt"), so one
+    // that has none takes the one the converter gives a game of its kind.
+    delete gameflow.savegame_fmt;
+    if (typeof gameflow.savegame_file_fmt !== 'string') {
+        const template = parseJSON5(getTemplate(`tr${gameVersion}-level`, 'gameflow.json5')) as AnyObj;
+        if (typeof template.savegame_file_fmt === 'string') gameflow.savegame_file_fmt = template.savegame_file_fmt;
+    }
 
     // TRX 1.9: game modes became a policy, which older game flows also gave
     // outside the enforced settings.
@@ -404,7 +414,16 @@ function migrateStrings(doc: AnyObj, release: number, gameVersion: number): void
         const out: AnyObj = {};
         for (const [key, value] of Object.entries(objects)) {
             const now = currentObjectKey(key, release, gameVersion);
-            if (now !== null) out[now] = value;
+            if (now === null) continue;
+            // TRX 1.11: an object's names are one string, the name the game
+            // shows first and the ones the console takes after it, split by |.
+            if (isObject(value) && Array.isArray(value.names)) {
+                const names = value.names.filter((name: unknown): name is string => typeof name === 'string');
+                const { names: _names, ...rest } = value;
+                out[now] = names.length > 0 ? { ...rest, name: rest.name ?? names.join('|') } : rest;
+            } else {
+                out[now] = value;
+            }
         }
         return out;
     };
@@ -473,6 +492,8 @@ function parseCatalog(text: string): Row[] {
 
 function knownNames(file: string): Set<string> {
     const names = new Set<string>();
+    // Any object the engine knows may be in a game's object catalog.
+    if (file === 'catalog_objects.csv') for (const name of OBJECT_NAMES) names.add(name);
     for (const game of ['tr1', 'tr2', 'tr3']) {
         for (const row of parseCatalog(BASE_FILES[`${game}/${file}`] ?? '')) names.add(row.name);
     }
@@ -626,8 +647,11 @@ export async function migrateDataFiles(
     let stock = 0;
     let merged = 0;
     const scripts: LevelScripts = new Map();
+    const unreadable: string[] = [];
     const gameflowFile = files.find((f) => f.path === prefix + 'gameflow.json5');
     await renameStockInjections(files, prefix, gameVersion, gameflowFile);
+    const moved = relocateCatalogClashes(files, prefix, game, effective, gameVersion);
+    if (moved > 0) notes.push(`Moved ${moved} of the game's own object${moved === 1 ? '' : 's'} out of catalog slots TRX has since given objects of its own.`);
     const ownAnims = !gameflowFile || !/lara_animations\.bin/.test(decoder.decode(gameflowFile.data));
 
     for (const file of files) {
@@ -647,6 +671,13 @@ export async function migrateDataFiles(
         if (animCatalog && ownAnims) {
             file.data = encoder.encode(respellCatalog(name, decoder.decode(file.data)));
             out.push(file);
+            continue;
+        }
+        // TRX reads injections of its own format only (TRXJ, or TRXI); one
+        // made for TR1X or Tomb1Main (T1MJ) it refuses, and the game's own
+        // copy would hide the one TRX ships under that name.
+        if (kind === 'injection' && !readableInjection(file.data)) {
+            unreadable.push(name);
             continue;
         }
         if (kind !== null && (animCatalog || await isStock(file))) {
@@ -710,8 +741,63 @@ export async function migrateDataFiles(
     if (stock > 0) {
         notes.push(`Left out ${stock} unchanged cop${stock === 1 ? 'y' : 'ies'} of TRX's own files, so the current ones are used.`);
     }
+    if (unreadable.length > 0) {
+        notes.push(`Left out ${unreadable.length} injection${unreadable.length === 1 ? '' : 's'} in a format TRX does not read, made for TR1X or Tomb1Main (${unreadable.join(', ')}); TRX's own apply where it ships them.`);
+    }
     if (merged > 0) {
         notes.push(`Merged ${merged} of the game's own data file${merged === 1 ? '' : 's'} into TRX's current ones.`);
     }
     return { files: out, notes };
+}
+
+/** Whether TRX reads an injection: its own format starts TRXJ, or TRXI. */
+function readableInjection(data: Uint8Array): boolean {
+    const magic = String.fromCharCode(...data.subarray(0, 4));
+    return magic === 'TRXJ' || magic === 'TRXI';
+}
+
+/**
+ * A game's own object catalog may give a slot an object TRX has since given
+ * that slot one of its own: TR1 games made for TRX 1.10 put objects of
+ * other games in 330 to 332, where TRX now keeps the controls models its
+ * inventory script names, and a game whose catalog takes them away stops at
+ * startup ("unknown object 'controls_option_saturn'"). So the game's object
+ * moves to a slot nothing uses, in its levels (the object and every item that
+ * is one) and in its catalog, and TRX keeps its own. Returns how many moved.
+ */
+function relocateCatalogClashes(files: MappedFile[], prefix: string, game: string, release: number, gameVersion: number): number {
+    const catalogFile = files.find((f) => f.path === prefix + 'catalog_objects.csv');
+    if (!catalogFile) return 0;
+    const text = decoder.decode(catalogFile.data);
+    const base = new Map(parseCatalog(BASE_FILES[`${game}/catalog_objects.csv`] ?? '').map((row) => [row.num, row.name]));
+    const known = knownNames('catalog_objects.csv');
+    const clashes = parseCatalog(text).filter((row) => {
+        const name = currentObjectKey(row.name, release, gameVersion);
+        const theirs = base.get(row.num);
+        return name !== null && known.has(name) && theirs !== undefined && theirs !== name;
+    });
+    if (clashes.length === 0) return 0;
+
+    const levels = files.filter((f) => /^(levels|cuts)\/[^/]+$/.test(f.path.slice(prefix.length)));
+    const used = new Set<number>([...base.keys(), ...parseCatalog(text).map((row) => row.num)]);
+    for (const level of levels) for (const object of readLevelObjects(level.data)?.objects ?? []) used.add(object.id);
+    let next = Math.max(...used) + 1;
+    const renumbered = new Map<number, number>();
+    for (const clash of clashes) {
+        const to = next;
+        // Only a model moves: a slot a level has as no model of its own (a
+        // sprite, say) stays as it was.
+        const moved = levels.map((level) => (readLevelObjects(level.data)?.objects.some((o) => o.id === clash.num) ? renumberObject(level.data, clash.num, to) : level.data));
+        if (moved.some((data) => data === null)) continue;
+        levels.forEach((level, i) => { level.data = moved[i]!; });
+        renumbered.set(clash.num, to);
+        next++;
+    }
+    if (renumbered.size === 0) return 0;
+    catalogFile.data = encoder.encode(text.split(/\r?\n/).map((line) => {
+        const m = /^(\s*)(\d+)(\s*,.*)$/.exec(line);
+        const to = m ? renumbered.get(Number(m[2])) : undefined;
+        return to === undefined ? line : `${m![1]}${to}${m![3]}`;
+    }).join('\n'));
+    return renumbered.size;
 }

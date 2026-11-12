@@ -13,10 +13,13 @@ import { baseGame } from './basegame.ts';
 import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
 import { LEGACY_MARKER } from './legacy.ts';
+import { checkPlayable, settleObjects, settleReferences, type BaseNeed } from './references.ts';
 import type { MappedFile } from './types.ts';
 
 export type MigrationResult = {
     files: MappedFile[];
+    /** Files of the original game it needs and does not bring, for the caller to fetch (with fetchBase). */
+    needs: BaseNeed[];
     // What changed, for the person converting.
     notes: string[];
 };
@@ -26,6 +29,11 @@ export type MigrationOptions = {
     gameVersion: number;
     // The archive as uploaded, whose engine says which TRX it ran on.
     upload: MappedFile[];
+    /**
+     * Whether the files of the original game the game needs come from the
+     * caller (returned as needs), rather than the game doing without them.
+     */
+    fetchBase?: boolean;
 };
 
 export async function migrateToCurrentTRX(files: MappedFile[], options: MigrationOptions): Promise<MigrationResult> {
@@ -49,14 +57,18 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     if (base.lostArtifact) notes.push('Made for The Lost Artifact, which it keeps apart from Tomb Raider III.');
     const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release, base.gameScript);
     notes.push(...scripts.notes);
-    notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release));
+    notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release, options.gameVersion));
     const rules = applyLevelRules(scripts.files, options.modDir, options.gameVersion, guess.release, base);
     notes.push(...rules.notes);
     const data = await migrateDataFiles(rules.files, options.modDir, options.gameVersion, guess.release);
     notes.push(...data.notes);
     notes.push(...await rebuildFonts(data.files, options.modDir, options.gameVersion));
+    const needs: BaseNeed[] = [];
+    notes.push(...settleReferences(data.files, options.modDir, options.gameVersion, { fetchBase: options.fetchBase, needs }));
+    notes.push(...settleObjects(data.files, options.modDir, options.gameVersion));
+    checkPlayable(data.files, options.modDir, options.gameVersion);
 
     // Working files of the converter's own.
     const out = data.files.filter((file) => !/^games\/[^/]+\/(_meta|_loose)\//i.test(file.path));
-    return { files: out, notes };
+    return { files: out, notes, needs };
 }

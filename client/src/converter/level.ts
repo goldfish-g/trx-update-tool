@@ -3,6 +3,8 @@
 // follows the probes in TRX's src/trx/game/level/format/format_tr*.c.
 
 export type LevelItem = {
+    /** Byte offset of its record, whose first field is its object id. */
+    offset: number;
     objectId: number;
     room: number;
     x: number;
@@ -173,6 +175,7 @@ export function readLevel(data: Uint8Array): LevelData | null {
         const items: LevelItem[] = [];
         const itemCount = r.s32();
         for (let i = 0; i < itemCount; i++) {
+            const offset = r.at;
             const objectId = r.s16();
             const room = r.s16();
             const x = r.s32();
@@ -181,7 +184,7 @@ export function readLevel(data: Uint8Array): LevelData | null {
             const angle = r.s16();
             r.skip(game === 1 ? 2 : 4);
             const flags = r.u16();
-            items.push({ objectId, room, x, y, z, angle, flags });
+            items.push({ offset, objectId, room, x, y, z, angle, flags });
         }
         return { gameVersion: game, floorDataOffset, floorDataCount, sectorFloorData, items };
     } catch {
@@ -389,6 +392,7 @@ export function readAlphabet(data: Uint8Array): { gameVersion: 1 | 2 | 3; glyphs
 
 const TO_CAMERA = 1;
 const TO_FINISH = 7;
+const TO_CD = 8;
 const TO_FLYBY = 12;
 const FT_DOOR = 1;
 const FT_TILT = 2;
@@ -444,6 +448,43 @@ export function clearEndLevelParameters(data: Uint8Array, level: LevelData): num
     return changed;
 }
 
+/** The music tracks a level's triggers play (TO_CD), as the level file numbers them. */
+export function cdTracks(data: Uint8Array): number[] {
+    const level = readLevel(data);
+    if (level === null) return [];
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const word = (i: number) => view.getUint16(level.floorDataOffset + i * 2, true);
+    const tracks = new Set<number>();
+    for (const start of new Set(level.sectorFloorData)) {
+        if (start === 0 || start >= level.floorDataCount) continue;
+        let i = start;
+        let entry = 0;
+        do {
+            if (i >= level.floorDataCount) break;
+            entry = word(i++);
+            const type = entry & 0x1f;
+            if (type === FT_DOOR || type === FT_TILT || type === FT_ROOF || (type >= 7 && type <= 18)) {
+                i++;
+            } else if (type === FT_TRIGGER) {
+                i++;
+                const triggerType = (entry & 0x7f00) >> 8;
+                if (triggerType === TT_SWITCH || triggerType === TT_KEY || triggerType === TT_PICKUP) {
+                    if (word(i++) & 0x8000) continue;
+                }
+                let command = 0;
+                do {
+                    if (i >= level.floorDataCount) break;
+                    command = word(i++);
+                    const kind = (command & 0x7c00) >> 10;
+                    if (kind === TO_CAMERA || kind === TO_FLYBY) command = word(i++);
+                    else if (kind === TO_CD) tracks.add(command & 0x3ff);
+                } while (!(command & 0x8000));
+            }
+        } while (!(entry & 0x8000));
+    }
+    return [...tracks].sort((a, b) => a - b);
+}
+
 // ---------------------------------------------------------------------------
 // Objects
 // ---------------------------------------------------------------------------
@@ -453,10 +494,19 @@ export type LevelObject = {
     meshCount: number;
     /** Index of its first mesh in the mesh pointer table. */
     firstMesh: number;
+    /** Where its bones start in the bone table, in 32-bit words. */
+    tree: number;
+    /** Where its first frame starts in the frame table, in bytes. */
+    frame: number;
 };
 
 /** Where a level keeps its objects' meshes, bones and records, for adding an object. */
 export type LevelObjects = {
+    gameVersion: 1 | 2 | 3;
+    /** Byte offsets of the mesh data's count, of its first byte, and of the byte after it. */
+    meshDataAt: number;
+    meshDataStart: number;
+    meshDataEnd: number;
     meshPointers: number[];
     /** Byte offsets of each table's count, and of the byte after its last record. */
     meshPointersAt: number;
@@ -464,6 +514,9 @@ export type LevelObjects = {
     boneCount: number;
     bonesAt: number;
     bonesEnd: number;
+    /** Byte offset of the first frame word. */
+    framesStart: number;
+    framesEnd: number;
     objectsAt: number;
     objectsEnd: number;
     objects: LevelObject[];
@@ -509,7 +562,9 @@ export function readLevelObjects(data: Uint8Array): LevelObjects | null {
             }
         }
         r.arr32(2); // floor data
+        const meshDataAt = r.at;
         r.arr32(2); // object meshes
+        const meshDataEnd = r.at;
 
         const meshPointersAt = r.at;
         const pointerCount = r.s32();
@@ -524,7 +579,9 @@ export function readLevelObjects(data: Uint8Array): LevelObjects | null {
         const bonesAt = r.at;
         const boneCount = r.arr32(4);
         const bonesEnd = r.at;
+        const framesStart = r.at + 4;
         r.arr32(2); // animation frames
+        const framesEnd = r.at;
 
         const objectsAt = r.at;
         const objectCount = r.s32();
@@ -532,15 +589,27 @@ export function readLevelObjects(data: Uint8Array): LevelObjects | null {
         for (let i = 0; i < objectCount; i++) {
             const at = r.at;
             r.skip(18);
-            objects.push({ id: view.getUint32(at, true), meshCount: view.getUint16(at + 4, true), firstMesh: view.getUint16(at + 6, true) });
+            objects.push({
+                id: view.getUint32(at, true),
+                meshCount: view.getUint16(at + 4, true),
+                firstMesh: view.getUint16(at + 6, true),
+                tree: view.getUint32(at + 8, true),
+                frame: view.getUint32(at + 12, true),
+            });
         }
         return {
+            gameVersion: game,
+            meshDataAt,
+            meshDataStart: meshDataAt + 4,
+            meshDataEnd,
             meshPointers,
             meshPointersAt,
             meshPointersEnd,
             boneCount,
             bonesAt,
             bonesEnd,
+            framesStart,
+            framesEnd,
             objectsAt,
             objectsEnd: r.at,
             objects,
@@ -550,17 +619,149 @@ export function readLevelObjects(data: Uint8Array): LevelObjects | null {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Meshes
+// ---------------------------------------------------------------------------
+
+/** A turn about each axis, in 65536ths of a circle, applied in the order Y, X, Z. */
+export type Rotation = { x: number; y: number; z: number };
+export type Offset = { x: number; y: number; z: number };
+
+/** The length in bytes of the mesh at that offset into the mesh data, which TR1 to TR3 share one layout for. */
+function meshLength(view: DataView, start: number): number {
+    let at = start + 10; // centre, collision radius
+    at += view.getInt16(at, true) * 6 + 2; // vertices
+    const normals = view.getInt16(at, true);
+    at += (normals > 0 ? normals * 6 : -normals * 2) + 2; // normals, or shades
+    for (const corners of [4, 3, 4, 3]) at += view.getInt16(at, true) * (corners + 1) * 2 + 2; // faces
+    return at - start;
+}
+
+/** A copy of the bytes of the mesh at that place in the mesh pointer table. */
+export function meshData(data: Uint8Array, level: LevelObjects, mesh: number): Uint8Array {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const start = level.meshDataStart + level.meshPointers[mesh];
+    if (start >= level.meshDataEnd) throw new Error('mesh outside the mesh data');
+    const length = meshLength(view, start);
+    if (start + length > level.meshDataEnd) throw new Error('mesh outside the mesh data');
+    return data.slice(start, start + length);
+}
+
+/** Where a bone of an object puts the mesh after it, from the mesh its parent is. */
+export function boneOffset(data: Uint8Array, level: LevelObjects, object: LevelObject, mesh: number): Offset {
+    const at = level.bonesAt + 4 + (object.tree + (mesh - 1) * 4) * 4;
+    if (mesh < 1 || at + 16 > level.bonesEnd) throw new Error('bone outside the bone table');
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    return { x: view.getInt32(at + 4, true), y: view.getInt32(at + 8, true), z: view.getInt32(at + 12, true) };
+}
+
+/** How the first frame of an object turns one of its meshes, read as TRX's anims/frames.c reads it. */
+export function frameRotation(data: Uint8Array, level: LevelObjects, object: LevelObject, mesh: number): Rotation {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    let at = level.framesStart + object.frame + 9 * 2; // bounds, offset
+    if (level.gameVersion === 1) at += 2; // mesh count
+    const word = (): number => {
+        if (at + 2 > level.framesEnd) throw new Error('frame outside the frame table');
+        const value = view.getUint16(at, true);
+        at += 2;
+        return value;
+    };
+    const all = (first: number, second: number): Rotation => ({
+        x: ((first & 0x3ff0) << 2) & 0xffff,
+        y: ((((first & 0xf) << 6) | ((second & 0xfc00) >> 10)) << 6) & 0xffff,
+        z: ((second & 0x3ff) << 6) & 0xffff,
+    });
+    let rotation: Rotation = { x: 0, y: 0, z: 0 };
+    for (let i = 0; i <= mesh; i++) {
+        const first = word();
+        if (level.gameVersion === 1) {
+            const second = word();
+            rotation = all(second, first);
+            continue;
+        }
+        const angle = ((first & 0x3ff) << 6) & 0xffff;
+        switch ((first >> 14) & 3) {
+            case 1: rotation = { x: angle, y: 0, z: 0 }; break;
+            case 2: rotation = { x: 0, y: angle, z: 0 }; break;
+            case 3: rotation = { x: 0, y: 0, z: angle }; break;
+            default: rotation = all(first, word());
+        }
+    }
+    return rotation;
+}
+
 /**
- * The level with one more object, whose meshes are meshes the level already
- * has, by their places in the mesh pointer table. It shares their geometry,
- * so nothing is copied but the pointers; it has no animations, and bones
- * that offset nothing.
+ * The mesh moved into the space of the joint it would hang off: turned as
+ * Matrix_Rot16 turns (Y, then X, then Z) and then put at the offset, the way
+ * the engine draws a mesh one bone further on. Its normals turn with it.
  */
-export function addMeshObject(data: Uint8Array, level: LevelObjects, id: number, meshes: number[]): Uint8Array {
+export function placeMesh(mesh: Uint8Array, rotation: Rotation, offset: Offset): Uint8Array {
+    const out = mesh.slice();
+    const view = new DataView(out.buffer);
+    const turn = (axis: number): [number, number] => {
+        const radians = (axis / 65536) * 2 * Math.PI;
+        return [Math.sin(radians), Math.cos(radians)];
+    };
+    const [sy, cy] = turn(rotation.y);
+    const [sx, cx] = turn(rotation.x);
+    const [sz, cz] = turn(rotation.z);
+    const apply = (v: [number, number, number]): [number, number, number] => {
+        // Z, then X, then Y, as the product Ry Rx Rz meets a vector.
+        let [x, y, z] = v;
+        [x, y] = [x * cz - y * sz, x * sz + y * cz];
+        [y, z] = [y * cx - z * sx, y * sx + z * cx];
+        [x, z] = [x * cy + z * sy, -x * sy + z * cy];
+        return [x, y, z];
+    };
+    const clamp16 = (value: number): number => Math.max(-32768, Math.min(32767, Math.round(value)));
+    const move = (at: number, translate: boolean): void => {
+        const [x, y, z] = apply([view.getInt16(at, true), view.getInt16(at + 2, true), view.getInt16(at + 4, true)]);
+        view.setInt16(at, clamp16(x + (translate ? offset.x : 0)), true);
+        view.setInt16(at + 2, clamp16(y + (translate ? offset.y : 0)), true);
+        view.setInt16(at + 4, clamp16(z + (translate ? offset.z : 0)), true);
+    };
+    move(0, true); // centre
+    let at = 10;
+    const vertices = view.getInt16(at, true);
+    at += 2;
+    for (let i = 0; i < vertices; i++, at += 6) move(at, true);
+    const normals = view.getInt16(at, true);
+    at += 2;
+    for (let i = 0; i < normals; i++, at += 6) move(at, false);
+    return out;
+}
+
+/**
+ * The level with one more object. Its meshes are meshes the level already
+ * has, by their places in the mesh pointer table, which it shares, or new
+ * ones, whose bytes go at the end of the mesh data. It has no animations,
+ * and bones that offset nothing.
+ */
+export function addMeshObject(data: Uint8Array, level: LevelObjects, id: number, meshes: (number | Uint8Array)[]): Uint8Array {
     if (meshes.length === 0 || level.meshPointers.length + meshes.length > 0xffff) throw new Error('too many meshes');
+    // New meshes, each at a 4-byte boundary of the mesh data.
+    const added: Uint8Array[] = [];
+    let meshBytes = level.meshDataEnd - level.meshDataStart;
     const pointers = new Uint8Array(meshes.length * 4);
     const pointerView = new DataView(pointers.buffer);
-    meshes.forEach((mesh, i) => pointerView.setUint32(i * 4, level.meshPointers[mesh], true));
+    meshes.forEach((mesh, i) => {
+        if (typeof mesh === 'number') {
+            pointerView.setUint32(i * 4, level.meshPointers[mesh], true);
+            return;
+        }
+        const padding = (4 - (meshBytes % 4)) % 4;
+        const bytes = new Uint8Array(padding + mesh.length + ((4 - (mesh.length % 4)) % 4));
+        bytes.set(mesh, padding);
+        pointerView.setUint32(i * 4, meshBytes + padding, true);
+        added.push(bytes);
+        meshBytes += bytes.length;
+    });
+    const newMeshes = new Uint8Array(meshBytes - (level.meshDataEnd - level.meshDataStart));
+    let filled = 0;
+    for (const bytes of added) {
+        newMeshes.set(bytes, filled);
+        filled += bytes.length;
+    }
     const bones = new Uint8Array((meshes.length - 1) * 16);
     const record = new Uint8Array(18);
     const recordView = new DataView(record.buffer);
@@ -571,13 +772,15 @@ export function addMeshObject(data: Uint8Array, level: LevelObjects, id: number,
     recordView.setUint32(12, 0, true);
     recordView.setUint16(16, 0xffff, true);
 
-    const out = new Uint8Array(data.length + pointers.length + bones.length + record.length);
+    const out = new Uint8Array(data.length + newMeshes.length + pointers.length + bones.length + record.length);
     let at = 0;
     const put = (part: Uint8Array) => {
         out.set(part, at);
         at += part.length;
     };
-    put(data.subarray(0, level.meshPointersEnd));
+    put(data.subarray(0, level.meshDataEnd));
+    put(newMeshes);
+    put(data.subarray(level.meshDataEnd, level.meshPointersEnd));
     put(pointers);
     put(data.subarray(level.meshPointersEnd, level.bonesEnd));
     put(bones);
@@ -586,8 +789,68 @@ export function addMeshObject(data: Uint8Array, level: LevelObjects, id: number,
     put(data.subarray(level.objectsEnd));
 
     const view = new DataView(out.buffer);
-    view.setInt32(level.meshPointersAt, level.meshPointers.length + meshes.length, true);
-    view.setInt32(level.bonesAt + pointers.length, level.boneCount + (meshes.length - 1) * 4, true);
-    view.setInt32(level.objectsAt + pointers.length + bones.length, level.objects.length + 1, true);
+    let shift = newMeshes.length;
+    view.setInt32(level.meshDataAt, meshBytes / 2, true);
+    view.setInt32(level.meshPointersAt + shift, level.meshPointers.length + meshes.length, true);
+    shift += pointers.length;
+    view.setInt32(level.bonesAt + shift, level.boneCount + (meshes.length - 1) * 4, true);
+    shift += bones.length;
+    view.setInt32(level.objectsAt + shift, level.objects.length + 1, true);
+    return out;
+}
+
+/**
+ * The level with the object in slot `from` moved to slot `to`, or null when
+ * it has no such object, `to` is taken, or an item of the level is one, as
+ * the move would change what that item is.
+ */
+export function moveObject(data: Uint8Array, from: number, to: number): Uint8Array | null {
+    const objects = readLevelObjects(data);
+    const level = readLevel(data);
+    if (objects === null || level === null) return null;
+    const index = objects.objects.findIndex((object) => object.id === from);
+    if (index < 0 || objects.objects.some((object) => object.id === to)) return null;
+    if (level.items.some((item) => item.objectId === from)) return null;
+    const out = data.slice();
+    new DataView(out.buffer).setUint32(objects.objectsAt + 4 + index * 18, to, true);
+    return out;
+}
+
+/**
+ * The level without the object records of those slots, or null when it has
+ * none of them. Their meshes, bones and frames stay, unused.
+ */
+export function removeObjects(data: Uint8Array, ids: Set<number>): Uint8Array | null {
+    const objects = readLevelObjects(data);
+    if (objects === null) return null;
+    const keep = objects.objects.map((object, i) => ({ object, i })).filter(({ object }) => !ids.has(object.id));
+    if (keep.length === objects.objects.length) return null;
+    const records = new Uint8Array(keep.length * 18);
+    keep.forEach(({ i }, n) => records.set(data.subarray(objects.objectsAt + 4 + i * 18, objects.objectsAt + 4 + (i + 1) * 18), n * 18));
+    const out = new Uint8Array(data.length - (objects.objects.length - keep.length) * 18);
+    out.set(data.subarray(0, objects.objectsAt));
+    new DataView(out.buffer).setInt32(objects.objectsAt, keep.length, true);
+    out.set(records, objects.objectsAt + 4);
+    out.set(data.subarray(objects.objectsEnd), objects.objectsAt + 4 + records.length);
+    return out;
+}
+
+/**
+ * The level with the object in slot `from` in slot `to` instead, and every
+ * item that is one of it too; null when the level has no such object, or
+ * has one in `to` already.
+ */
+export function renumberObject(data: Uint8Array, from: number, to: number): Uint8Array | null {
+    const objects = readLevelObjects(data);
+    const level = readLevel(data);
+    if (objects === null || level === null) return null;
+    const index = objects.objects.findIndex((object) => object.id === from);
+    if (index < 0 || objects.objects.some((object) => object.id === to)) return null;
+    const out = data.slice();
+    const view = new DataView(out.buffer);
+    view.setUint32(objects.objectsAt + 4 + index * 18, to, true);
+    for (const item of level.items) {
+        if (item.objectId === from) view.setInt16(item.offset, to, true);
+    }
     return out;
 }

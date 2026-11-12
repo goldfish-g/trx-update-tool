@@ -2,7 +2,7 @@ import type { MappedFile } from './types.ts';
 import { parseJSON5 } from './json5.ts';
 import { parseTR2Script } from './tombpc.ts';
 import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
-import { cfgGameflow, translateLegacy } from './legacy.ts';
+import { cfgGameflow, dressClassicGame, translateLegacy } from './legacy.ts';
 import { currentInjectionName } from './stock.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -474,6 +474,8 @@ async function buildGameflow(
                         }
                     }
                 }
+                // The original engine drew Lara from her levels.
+                dressClassicGame(result, modDir, gameVersion);
                 return result;
             }
         } catch (e) {
@@ -536,6 +538,8 @@ async function buildGameflow(
             return { title: f.replace(/\.[^.]+$/, '') };
         }));
     result.push(...outfitFiles, ...strFiles);
+    // The original engine drew Lara from her levels.
+    dressClassicGame(result, modDir, gameVersion);
 
     return result;
 }

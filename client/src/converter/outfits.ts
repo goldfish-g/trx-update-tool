@@ -14,6 +14,8 @@
 // and docs/trx/OUTFITS.md).
 
 import { getCfgFile } from '../templates/index.ts';
+import { BASE_FILES } from '../templates/base/index.ts';
+import { moveObject, readLevelObjects } from './level.ts';
 import { parseJSON5 } from './json5.ts';
 import type { MappedFile } from './types.ts';
 
@@ -104,7 +106,7 @@ function injectsOutfits(gameflowText: string): boolean {
  * from its own (games/<mod>/outfits.json5, or the cfg/outfits.json5 the
  * archive carried, kept at _meta/outfits.json5).
  */
-export function migrateOutfits(files: MappedFile[], modDir: string, release: number | null): string[] {
+export function migrateOutfits(files: MappedFile[], modDir: string, release: number | null, gameVersion: number): string[] {
     const prefix = `games/${modDir}/`;
     const decoder = new TextDecoder();
     const gameflow = files.find((f) => f.path === prefix + 'gameflow.json5');
@@ -126,14 +128,25 @@ export function migrateOutfits(files: MappedFile[], modDir: string, release: num
     let note: string;
     if (injectsOutfits(decoder.decode(gameflow.data))) {
         // TRX's objects, so TRX's outfits; the game's own ones go on top.
-        if (!modFile) return [];
         const shipped = parseJSON5(getCfgFile('outfits.json5')) as AnyObj;
         const mine = currentOutfitFormat(own);
         const added = Object.keys(mine.outfits ?? {}).filter((k) => !(k in shipped.outfits));
-        for (const key of added) shipped.outfits[key] = mine.outfits[key];
+        // A copy of TRX's own file in cfg/ says nothing TRX's current one does not.
+        if (!modFile && added.length === 0) return [];
+        const moved = new Map<string, string>();
+        for (const key of added) {
+            shipped.outfits[key] = rebaseOutfit(mine.outfits[key], shipped, gameVersion);
+            const object = shipped.outfits[key].mesh_object;
+            if (typeof object !== 'string') continue;
+            const to = moved.get(object) ?? moveOwnSkin(files, prefix, gameVersion, object, [...moved.values()]);
+            if (to !== null) {
+                moved.set(object, to);
+                shipped.outfits[key].mesh_object = to;
+            }
+        }
         result = shipped;
         note = added.length > 0
-            ? `Kept the game's own outfits (${added.join(', ')}) beside TRX's current ones.`
+            ? `Kept the game's own outfits (${added.join(', ')}) beside TRX's current ones${moved.size > 0 ? `, with ${moved.size} of the models its levels bring for them moved to where TRX's own outfits do not overwrite them` : ''}.`
             : "Replaced the game's outfit file with TRX's current one, which matches the outfits TRX injects.";
     } else {
         result = currentOutfitFormat(own);
@@ -148,4 +161,68 @@ export function migrateOutfits(files: MappedFile[], modDir: string, release: num
         files.push({ path: prefix + 'outfits.json5', data: encoded });
     }
     return [note];
+}
+
+// A game's own outfit names its meshes by their places in the objects of
+// the lara_outfits.bin of its release: the braid and combat face in the
+// extra object, the holsters in the legs object, its guns by a gun map.
+// TRX has moved those places since, so an outfit modelled on one of TRX's
+// own (its name, LARA_OUTFIT_TR2_CLASSIC, says which) takes that outfit's
+// current places and keeps only its own model and what it says of itself.
+
+/** The keys an outfit keeps of its own over the one it is modelled on. */
+const OWN_KEYS = ['mesh_object', 'is_barefoot', 'is_selectable', 'supports_sunglasses'];
+
+/** An outfit of the game's own, laid over the TRX outfit it is modelled on. */
+function rebaseOutfit(own: AnyObj, shipped: AnyObj, gameVersion: number): AnyObj {
+    const named = typeof own.name_gs === 'string'
+        ? (/^LARA_OUTFIT_(\w+)$/.exec(own.name_gs)?.[1]?.toLowerCase() ?? /^dynamic\/enums\/lara_outfit\/(\w+)$/.exec(own.name_gs)?.[1])
+        : undefined;
+    const base = shipped.outfits[named ?? ''] ?? (named === undefined ? undefined : shipped.outfits[`tr${gameVersion}_classic`]);
+    if (base === undefined) return own;
+    const out: AnyObj = JSON.parse(JSON.stringify(base));
+    for (const key of OWN_KEYS) if (own[key] !== undefined) out[key] = own[key];
+    return out;
+}
+
+/** The slots of the outfit objects lara_outfits.bin fills, which overwrite a level's own there. */
+const FILLED_SKINS = 24;
+/** The free ones a level's own outfit can move to; 32 holds the converter's guns object. */
+const FREE_SKINS = [25, 26, 27, 28, 29, 30, 31];
+
+/** The level slot of each object, by its name in TRX's catalog for the game. */
+function objectSlots(gameVersion: number): Map<string, number> {
+    const slots = new Map<string, number>();
+    for (const line of (BASE_FILES[`tr${gameVersion}/catalog_objects.csv`] ?? '').split('\n')) {
+        const match = /^\s*(\d+)\s*,\s*(\w+)/.exec(line);
+        if (match) slots.set(match[2], Number(match[1]));
+    }
+    return slots;
+}
+
+/**
+ * Moves the model the game's levels bring for an outfit out of a slot
+ * lara_outfits.bin fills, into a free one, in every level that brings it.
+ * Returns the outfit object's new name, or null when it stays (no level
+ * brings it, it is in a free slot already, or no free slot fits).
+ */
+function moveOwnSkin(files: MappedFile[], prefix: string, gameVersion: number, object: string, taken: string[]): string | null {
+    const number = Number(/^lara_skin_swap_(\d+)$/.exec(object)?.[1] ?? NaN);
+    if (!(number >= 1 && number <= FILLED_SKINS)) return null;
+    const slots = objectSlots(gameVersion);
+    const from = slots.get(object);
+    if (from === undefined) return null;
+    const levels = files.filter((f) => f.path.startsWith(prefix + 'levels/'));
+    const bringing = levels.filter((f) => readLevelObjects(f.data)?.objects.some((o) => o.id === from));
+    if (bringing.length === 0) return null;
+    for (const free of FREE_SKINS) {
+        const name = `lara_skin_swap_${free}`;
+        const to = slots.get(name);
+        if (to === undefined || taken.includes(name)) continue;
+        const moved = bringing.map((f) => moveObject(f.data, from, to));
+        if (moved.some((data) => data === null)) continue;
+        bringing.forEach((f, i) => { f.data = moved[i]!; });
+        return name;
+    }
+    return null;
 }
