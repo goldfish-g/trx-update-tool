@@ -336,16 +336,12 @@ export function parseTR2Script(rawData: Uint8Array, gameVersion: number): Script
             sequences[idx] = result.sequence;
         }
 
-        const cdOffset = titleSoundId > 0
-            ? titleSoundId - 60 : 4;
-
         return {
             filenames: filenames,
             levelTitles: levelTitles,
             musicTracks: musicTracks,
             sequences: sequences,
             titleSoundId: titleSoundId,
-            cdOffset: cdOffset,
             titleFiles: titlesBlock.strings,
             fmvFiles: fmvBlock.strings,
             cutsceneFiles: cutsceneBlock.strings,
@@ -354,4 +350,23 @@ export function parseTR2Script(rawData: Uint8Array, gameVersion: number): Script
     } catch {
         return null;
     }
+}
+
+/**
+ * The music file tomb2.exe played for a track number its script or a
+ * trigger gives (Music_GetRealTrack): the numbers skip 2, 19, 20 and 26, so
+ * the title theme, 64, is 60.mp3. TR2X 1.2 dropped the shift ("music: remove
+ * track shifting logic") and TRX plays the file a number names, giving TR2's
+ * own levels injections that renumber their triggers.
+ */
+export function tr2RealTrack(track: number): number {
+    if (track < 0) return track;
+    const skipped = [2, 19, 20, 26];
+    let result = 2;
+    let idx = 0;
+    for (let i = 2; i < track; i++) {
+        if (idx < skipped.length && i === skipped[idx]) idx++;
+        else result++;
+    }
+    return result;
 }

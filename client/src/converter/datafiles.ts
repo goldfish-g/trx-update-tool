@@ -16,6 +16,8 @@ import { CURRENT_RELEASE, currentMarkup } from './lua.ts';
 import { currentObjectKey, STATS_BACKGROUND } from './objects.ts';
 import { currentInjectionName, isStock, stockInjections } from './stock.ts';
 import type { MappedFile } from './types.ts';
+import { mergeRing } from './ring.ts';
+import { mergeWeapons } from './weapons.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
@@ -37,14 +39,6 @@ function writeJson(file: MappedFile, value: unknown): void {
 
 function isObject(value: unknown): value is AnyObj {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-/** b laid over a: objects merge, anything else from b replaces a's. */
-function deepMerge(a: unknown, b: unknown): unknown {
-    if (!isObject(a) || !isObject(b)) return b;
-    const out: AnyObj = { ...a };
-    for (const key of Object.keys(b)) out[key] = key in a ? deepMerge(a[key], b[key]) : b[key];
-    return out;
 }
 
 function baseName(path: string): string {
@@ -545,95 +539,26 @@ function mergeCatalog(file: string, own: string, game: string, release: number, 
 // Weapons
 // ---------------------------------------------------------------------------
 
-const GROUPS = /^(flash|glow|muzzle|smoke|shell|stow|save|cheat)_(.+)$/;
-const AIM: Record<string, string> = {
-    aim_speed: 'speed', shot_accuracy: 'accuracy', target_dist: 'target_dist',
-    lock_angles: 'lock', left_angles: 'left', right_angles: 'right',
-};
-const ANIM: Record<string, string> = {
-    draw_frame: 'draw_frame', undraw_frame: 'undraw_frame', recoil_frame: 'recoil_frame', equip_anim_idx: 'equip',
-};
-const OBJECTS: Record<string, string> = { gun_object: 'pickup', ammo_object: 'ammo', anim_object: 'anim' };
-const AMMO: Record<string, string> = { initial_qty: 'initial_shots', pickup_qty: 'box_shots', inventory_qty: 'box_label_qty' };
-
-/** One weapon's settings, from the flat layout before TRX 1.11 to the grouped one. */
-function currentWeapon(old: AnyObj, release: number, gameVersion: number): AnyObj {
-    const out: AnyObj = {};
-    const group = (name: string) => (out[name] ??= {});
-    for (const [key, value] of Object.entries(old)) {
-        // An empty position stood for the default, which the current layout
-        // spells by leaving the field out.
-        if (isObject(value) && Object.keys(value).length === 0) continue;
-        const grouped = GROUPS.exec(key);
-        if (key === 'type' && typeof value === 'string') {
-            out.kind = value.replace(/^WEAPON_TYPE_/, '').toLowerCase();
-        } else if (key === 'sample_num') {
-            group('sound').fire = typeof value === 'string' ? value.replace(/^SFX_/, '').toLowerCase() : value;
-        } else if (AIM[key]) {
-            group('aim')[AIM[key]] = value;
-        } else if (ANIM[key]) {
-            group('anim')[ANIM[key]] = value;
-        } else if (OBJECTS[key]) {
-            group('objects')[OBJECTS[key]] = typeof value === 'string'
-                ? currentObjectKey(value, release, gameVersion) ?? value
-                : value;
-        } else if (key === 'ammo' && isObject(value)) {
-            const ammo = group('ammo');
-            for (const [field, qty] of Object.entries(value)) {
-                if (field === 'pickup_qty_alt') continue;
-                ammo[AMMO[field] ?? field] = qty;
-            }
-        } else if (key === 'pickup_qty') {
-            // TRX 1.6 gave the ammunition an object of its own.
-            group('ammo').initial_shots ??= value;
-            group('ammo').box_shots ??= value;
-        } else if (key === 'pickup_qty_alt') {
-            continue;
-        } else if (grouped) {
-            group(grouped[1])[grouped[2]] = value;
-        } else {
-            out[key] = value;
-        }
-    }
-    return out;
-}
-
-export function mergeWeapons(own: AnyObj, game: string, release: number, gameVersion: number): AnyObj | null {
+/**
+ * The game's weapons file over the one TRX ships for the game it extends
+ * (weapons.ts). Which fields TRX's own files had is a large table, wanted
+ * only by games made for TRX 1.10 or later that bring a weapons file.
+ */
+export async function mergeGameWeapons(own: AnyObj, game: string, release: number, gameVersion: number): Promise<AnyObj> {
     const base = parseJSON5(BASE_FILES[`${game}/weapons.json5`] ?? '{}') as AnyObj;
-    for (const [rawKey, weapon] of Object.entries(own)) {
-        if (!isObject(weapon)) continue;
-        const key = rawKey.replace(/^LGT_/, '').toLowerCase();
-        // A weapon the game does not list is not in it, and TRX lists the
-        // ones its routines can handle.
-        if (!(key in base)) continue;
-        // The layout before TRX 1.11, which a file may keep whatever it says.
-        const flat = Object.keys(weapon).some((k) =>
-            k === 'type' || k === 'sample_num' || k in AIM || k in ANIM || k in OBJECTS || GROUPS.test(k));
-        const current = release < 11 || flat ? currentWeapon(weapon, release, gameVersion) : weapon;
-        base[key] = deepMerge(base[key], current);
-    }
-    return base;
+    const stock = release >= 10 ? (await import('./stockfields.generated.ts')).STOCK_WEAPON_FIELDS : null;
+    return mergeWeapons(own, base, release, gameVersion, stock);
 }
 
 // ---------------------------------------------------------------------------
 // Inventory ring
 // ---------------------------------------------------------------------------
 
-function mergeRing(own: unknown, game: string, release: number, gameVersion: number): unknown[] | null {
-    if (!Array.isArray(own)) return null;
+/** The game's ring file over the one TRX ships for the game it extends (ring.ts). */
+async function mergeGameRing(own: unknown, game: string, release: number, gameVersion: number): Promise<AnyObj[] | null> {
     const base = parseJSON5(BASE_FILES[`${game}/inv_ring.json5`] ?? '[]') as AnyObj[];
-    const at = new Map<string, number>();
-    base.forEach((entry, i) => at.set(entry.object_id, i));
-    for (const entry of own) {
-        if (!isObject(entry) || typeof entry.object_id !== 'string') continue;
-        const id = currentObjectKey(entry.object_id, release, gameVersion);
-        if (id === null) continue;
-        const now = { ...entry, object_id: id };
-        const i = at.get(id);
-        if (i !== undefined) base[i] = deepMerge(base[i], now) as AnyObj;
-        else base.push(now);
-    }
-    return base;
+    const { STOCK_RING_OBJECTS } = await import('./stockfields.generated.ts');
+    return mergeRing(own, base, release, gameVersion, STOCK_RING_OBJECTS);
 }
 
 // ---------------------------------------------------------------------------
@@ -702,13 +627,13 @@ export async function migrateDataFiles(
             }
         } else if (rel === 'weapons.json5' && BASE_FILES[`${game}/weapons.json5`]) {
             const own = readJson(file);
-            const weapons = own && mergeWeapons(own, game, effective, gameVersion);
+            const weapons = own && await mergeGameWeapons(own, game, effective, gameVersion);
             if (weapons) {
                 writeJson(file, weapons);
                 merged++;
             }
         } else if (rel === 'inv_ring.json5' && BASE_FILES[`${game}/inv_ring.json5`]) {
-            const ring = mergeRing(readJson(file), game, effective, gameVersion);
+            const ring = await mergeGameRing(readJson(file), game, effective, gameVersion);
             if (ring) {
                 writeJson(file, ring);
                 merged++;

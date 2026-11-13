@@ -448,6 +448,56 @@ export function clearEndLevelParameters(data: Uint8Array, level: LevelData): num
     return changed;
 }
 
+/**
+ * Renumbers the music tracks a level's triggers play (TO_CD) with `map`, in
+ * place; each trigger once, however many sectors share it. Returns how many
+ * changed.
+ */
+export function remapMusicTriggers(data: Uint8Array, level: LevelData, map: (track: number) => number): number {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const word = (i: number) => view.getUint16(level.floorDataOffset + i * 2, true);
+    const done = new Set<number>();
+    let changed = 0;
+    for (const start of new Set(level.sectorFloorData)) {
+        if (start === 0 || start >= level.floorDataCount) continue;
+        let i = start;
+        let entry = 0;
+        do {
+            if (i >= level.floorDataCount) break;
+            entry = word(i++);
+            const type = entry & 0x1f;
+            if (type === FT_DOOR || type === FT_TILT || type === FT_ROOF || (type >= 7 && type <= 18)) {
+                i++;
+            } else if (type === FT_TRIGGER) {
+                i++;
+                const triggerType = (entry & 0x7f00) >> 8;
+                if (triggerType === TT_SWITCH || triggerType === TT_KEY || triggerType === TT_PICKUP) {
+                    if (word(i++) & 0x8000) continue;
+                }
+                let command = 0;
+                do {
+                    if (i >= level.floorDataCount) break;
+                    const at = i;
+                    command = word(i++);
+                    const kind = (command & 0x7c00) >> 10;
+                    if (kind === TO_CAMERA || kind === TO_FLYBY) {
+                        command = word(i++);
+                    } else if (kind === TO_CD && !done.has(at)) {
+                        done.add(at);
+                        const track = command & 0x3ff;
+                        const now = map(track) & 0x3ff;
+                        if (now !== track) {
+                            view.setUint16(level.floorDataOffset + at * 2, (command & ~0x3ff) | now, true);
+                            changed++;
+                        }
+                    }
+                } while (!(command & 0x8000));
+            }
+        } while (!(entry & 0x8000));
+    }
+    return changed;
+}
+
 /** The music tracks a level's triggers play (TO_CD), as the level file numbers them. */
 export function cdTracks(data: Uint8Array): number[] {
     const level = readLevel(data);

@@ -11,6 +11,7 @@ import { archiveEngine, executableVersion, trxRelease } from './engine.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { luaObjectRenames } from './objects.ts';
+import { isStock } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
 /** The TRX 1.x release the converter writes for. */
@@ -318,6 +319,8 @@ const COMPAT = 'require(trx.mod.current.name .. ".trx_compat")';
 
 function header(release: number, code: string): string {
     const names = ['trx', 'require'];
+    // TR1X 4.15 and TR2X 1.5 handed scripts a global TRX (trx_compat.lua LEGACY_TRX).
+    if (usesGlobal(code, 'TRX')) names.push('TRX');
     const call = `${COMPAT}(${release})`;
     if (release < 10 && usesGlobal(code, 'os')) {
         // os went with the sandbox in TRX 1.10; the clock it gave is the game's.
@@ -369,6 +372,7 @@ export function migrateScripts(
     gameVersion: number,
     release: number | null,
     baseGameScript: string,
+    current: ReadonlySet<string> = new Set(),
 ): ScriptMigration {
     const prefix = `games/${modDir}/`;
     const loose = prefix + '_loose/';
@@ -385,6 +389,8 @@ export function migrateScripts(
         if (!file.path.startsWith(loose)) continue;
         byPath.delete(file.path);
         const rel = file.path.slice(loose.length);
+        // From TRX 1.10 a game's scripts are found by name only, and those
+        // of the engine's data/scripts/ are moved already (settleStockScripts).
         if (effective >= 10 || /^data\/scripting\//.test(rel)) continue;
         const name = moduleName(rel);
         byPath.set(prefix + 'modules/' + name.replace(/\./g, '/') + '.lua', { path: prefix + 'modules/' + name.replace(/\./g, '/') + '.lua', data: file.data });
@@ -465,7 +471,7 @@ export function migrateScripts(
     let opened = 0;
     for (const file of [...byPath.values()]) {
         const lower = file.path.toLowerCase();
-        if (!lower.startsWith(prefix) || !lower.endsWith('.lua') || file.path === gameScriptPath) continue;
+        if (!lower.startsWith(prefix) || !lower.endsWith('.lua') || file.path === gameScriptPath || current.has(file.path)) continue;
         let src = decoder.decode(file.data);
         if (effective < 12) src = currentMarkupInLua(src, gameVersion);
         src = header(effective, codeOnly(src)) + src;
@@ -494,4 +500,57 @@ export function migrateScripts(
         );
     }
     return { files: [...byPath.values()], notes };
+}
+
+/**
+ * The game's copies of scripts TRX shipped (history.generated.ts), as a game
+ * laid out as a whole TRX brings them all. A copy of the game script gives
+ * way to the one TRX ships for the game it extends, which TRX runs where a
+ * game has none of its own. A copy of a level script becomes the script TRX
+ * ships under that name now, with what TRX has moved into it since (the
+ * assault course's timer, say): TRX runs a level's script from the game's
+ * own directory only. Returns the scripts that are TRX's own now, which need
+ * no compatibility module (migrateScripts).
+ *
+ * TRX 1.10 to 1.12 also ran a level's script, and the game script, from the
+ * engine's data/scripts/ where the game had none of its own: those of a game
+ * made for them join its own first.
+ */
+export async function settleStockScripts(
+    files: MappedFile[], modDir: string, gameVersion: number, release: number | null,
+): Promise<{ files: MappedFile[]; current: Set<string>; notes: string[] }> {
+    const prefix = `games/${modDir}/scripts/`;
+    let all = files;
+    if ((release ?? CURRENT_RELEASE) >= 10) {
+        const loose = `games/${modDir}/_loose/`;
+        const taken = new Set(files.map((f) => f.path));
+        all = files.map((f) => {
+            const script = f.path.startsWith(loose) ? /(?:^|\/)data\/scripts\/([^/]+\.lua)$/.exec(f.path.slice(loose.length)) : null;
+            if (script === null || taken.has(prefix + script[1])) return f;
+            taken.add(prefix + script[1]);
+            return { path: prefix + script[1], data: f.data };
+        });
+    }
+    const candidates = all.filter((f) => f.path.startsWith(prefix) && /^[^/]+\.lua$/.test(f.path.slice(prefix.length)));
+    const current = new Set<string>();
+    if (candidates.length === 0) return { files: all, current, notes: [] };
+    const { BASE_LEVEL_SCRIPTS } = await import('../templates/base/level_scripts.ts');
+    const dropped = new Set<MappedFile>();
+    for (const file of candidates) {
+        if (!await isStock(file)) continue;
+        const name = file.path.slice(prefix.length).toLowerCase();
+        const now = BASE_LEVEL_SCRIPTS[`tr${gameVersion}/${name}`];
+        if (name === '_game.lua') {
+            dropped.add(file);
+        } else if (now !== undefined) {
+            file.data = new TextEncoder().encode(now);
+            current.add(file.path);
+        }
+    }
+    const notes: string[] = [];
+    const count = dropped.size + current.size;
+    if (count > 0) {
+        notes.push(`Gave ${count} unchanged cop${count === 1 ? 'y' : 'ies'} of TRX's own scripts the current version${count === 1 ? '' : 's'}.`);
+    }
+    return { files: all.filter((f) => !dropped.has(f)), current, notes };
 }

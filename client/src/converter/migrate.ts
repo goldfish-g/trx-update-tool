@@ -10,9 +10,11 @@ import { migrateDataFiles } from './datafiles.ts';
 import { rebuildFonts } from './font.ts';
 import { applyLevelRules } from './levelrules.ts';
 import { baseGame } from './basegame.ts';
-import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
+import { CURRENT_RELEASE, detectRelease, migrateScripts, settleStockScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
 import { LEGACY_MARKER } from './legacy.ts';
+import { splitCdAudio } from './cdaudio.ts';
+import { MUSIC_NOTE } from './gameflow.ts';
 import { checkPlayable, settleObjects, settleReferences, type BaseNeed } from './references.ts';
 import { keepOwnPresets, keepStartingSettings } from './settings.ts';
 import { carryEngineStrings } from './strings.ts';
@@ -55,9 +57,18 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
         notes.push(`Made for TRX 1.${guess.release} (from ${guess.from}).`);
     }
 
+    const music = files.find((f) => f.path === `games/${options.modDir}/${MUSIC_NOTE}`);
+    if (music) {
+        const n = Number(new TextDecoder().decode(music.data));
+        notes.push(n > 0
+            ? `Renumbered the music its script and ${n} level trigger${n === 1 ? '' : 's'} play to the files the original engine played for them, as TRX numbers music.`
+            : 'Renumbered the music its script plays to the files the original engine played for it, as TRX numbers music.');
+    }
     const base = baseGame(files, options.modDir, options.gameVersion);
     if (base.lostArtifact) notes.push('Made for The Lost Artifact, which it keeps apart from Tomb Raider III.');
-    const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release, base.gameScript);
+    const stockScripts = await settleStockScripts(files, options.modDir, options.gameVersion, guess.release);
+    notes.push(...stockScripts.notes);
+    const scripts = migrateScripts(stockScripts.files, options.modDir, options.gameVersion, guess.release, base.gameScript, stockScripts.current);
     notes.push(...scripts.notes);
     notes.push(...await migrateOutfits(scripts.files, options.modDir, guess.release, options.gameVersion));
     const rules = applyLevelRules(scripts.files, options.modDir, options.gameVersion, guess.release, base);
@@ -69,6 +80,12 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     const presets = await keepOwnPresets(data.files, options.modDir);
     notes.push(...presets.notes);
     notes.push(...await carryEngineStrings(data.files, options.modDir, guess.release, options.gameVersion, presets.names));
+    if (options.gameVersion === 2) {
+        const tombpc = data.files.some((f) => f.path === `games/${options.modDir}/tombpc.dat`);
+        const soundtrack = splitCdAudio(data.files, options.modDir, tombpc);
+        data.files = soundtrack.files;
+        notes.push(...soundtrack.notes);
+    }
     const needs: BaseNeed[] = [];
     notes.push(...settleReferences(data.files, options.modDir, options.gameVersion, { fetchBase: options.fetchBase, needs }));
     notes.push(...settleObjects(data.files, options.modDir, options.gameVersion));

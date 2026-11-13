@@ -15,9 +15,10 @@ import { recordedEngine, trxRelease } from './engine.ts';
 import { injectLevelDefaultOutfit, addOutfitLabel } from './gameflow.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_STRING_IDS } from './legacy.generated.ts';
-import { addMeshObject, boneOffset, frameRotation, meshData, placeMesh, readLevelObjects, type LevelObject, type LevelObjects } from './level.ts';
+import { addMeshObject, boneOffset, frameRotation, meshData, placeMesh, readLevel, readLevelObjects, remapMusicTriggers, type LevelObject, type LevelObjects } from './level.ts';
 import { CURRENT_RELEASE } from './lua.ts';
 import { currentInjectionName, stockInjections } from './stock.ts';
+import { tr2RealTrack } from './tombpc.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -451,6 +452,19 @@ function injectionNamer(prefix: string, byPath: Map<string, MappedFile>, stockNa
  * the place TRX keeps them in now. Returns null when it has no such game
  * flow, or one that cannot be read.
  */
+/**
+ * Whether a TR2X game numbers its music as tomb2.exe did, which TR2X 1.2
+ * stopped ("music: remove track shifting logic"): by its version, or where
+ * none is known by its own game flow, whose secret chime and title theme
+ * TR2X 1.2 renumbered from 47 and 64 to 43 and 60.
+ */
+function tr2ShiftsMusic(version: string | null, gameflow: AnyObj): boolean {
+    const m = version === null ? null : /^(?:TR2X\s+)?v?(\d+)\.(\d+)/i.exec(version);
+    if (m) return +m[1]! < 1 || (+m[1]! === 1 && +m[2]! < 2);
+    const title = isObject(gameflow.title) ? gameflow.title.music_track : undefined;
+    return gameflow.secret_track === 47 || title === 64;
+}
+
 export async function translateLegacy(mapped: MappedFile[], modDir: string, gameVersion: number, modTitle: string): Promise<LegacyResult | null> {
     const prefix = `games/${modDir}/`;
     const source = findLegacy(mapped, prefix);
@@ -706,6 +720,33 @@ export async function translateLegacy(mapped: MappedFile[], modDir: string, game
     out.engine = gameVersion;
     out.extends = `tr${gameVersion}`;
     if (modTitle) out.name = modTitle;
+
+    // TR2X before 1.2 played music as tomb2.exe did, through
+    // Music_GetRealTrack (tombpc.ts tr2RealTrack): its game flow and levels
+    // name tracks by the numbers that shifted to the files, which TRX plays
+    // as they stand.
+    if (gameVersion === 2 && tr2ShiftsMusic(engine.version, old)) {
+        const real = (track: unknown) => (typeof track === 'number' ? tr2RealTrack(track) : track);
+        for (const holder of [...(out.title ? [out.title] : []), ...levels, ...cutscenes, ...(Array.isArray(out.demos) ? out.demos : [])] as AnyObj[]) {
+            if ('music_track' in holder) holder.music_track = real(holder.music_track);
+            for (const event of Array.isArray(holder.sequence) ? holder.sequence : []) {
+                if (isObject(event) && event.type === 'play_music') event.music_track = real(event.music_track);
+            }
+        }
+        let triggers = 0;
+        for (const file of files) {
+            if (!file.path.startsWith(prefix) || !/\/(levels|cuts)\/[^/]+\.tr2$/i.test(file.path)) continue;
+            const level = readLevel(file.data);
+            if (level === null) continue;
+            const copy = file.data.slice();
+            const n = remapMusicTriggers(copy, level, tr2RealTrack);
+            if (n > 0) {
+                file.data = copy;
+                triggers += n;
+            }
+        }
+        notes.push(`Renumbered the music its game flow and ${triggers} level trigger${triggers === 1 ? '' : 's'} play to the files TR2X played for them, as TRX numbers music.`);
+    }
 
     const doc: AnyObj = { levels: strings.levels };
     if (strings.cutscenes.length > 0) doc.cutscenes = strings.cutscenes;

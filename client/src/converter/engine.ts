@@ -61,10 +61,16 @@ export function trxRelease(version: string, current: number): number | null {
     return major === 1 ? Math.min(minor, current) : current;
 }
 
-/** The version of the first executable among the files that states one. */
+/** The engines' own executables, which a launcher such as PLAY.exe may sit beside. */
+const ENGINE_EXE = /(?:^|\/)(?:trx|tr[123]x|tomb[123]main)\.exe$/i;
+
+/**
+ * The version of the engine's executable, or else of the first executable
+ * among the files that states one.
+ */
 export function archiveEngine(entries: readonly MappedFile[]): string | null {
-    for (const entry of entries) {
-        if (!entry.path.toLowerCase().endsWith('.exe')) continue;
+    const exes = entries.filter((entry) => entry.path.toLowerCase().endsWith('.exe'));
+    for (const entry of [...exes.filter((e) => ENGINE_EXE.test(e.path)), ...exes.filter((e) => !ENGINE_EXE.test(e.path))]) {
         const version = executableVersion(entry.data);
         if (version !== null) return version;
     }

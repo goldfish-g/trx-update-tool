@@ -1388,6 +1388,149 @@ local function build(from)
   return wrap(engine, "trx"), compat_require
 end
 
+-------------------------------------------------------------------------------
+-- The API before TRX 1.0: TR1X 4.15 and TR2X 1.5 handed scripts a global
+-- `TRX` with capitalised modules (TRX.Events.Listen, TRX.Items.Get).
+-------------------------------------------------------------------------------
+
+local function call(path, ...)
+  local found = engine
+  for part in path:gmatch("[^.]+") do
+    found = found ~= nil and found[part] or nil
+  end
+  if type(found) == "function" then
+    return found(...)
+  end
+  engine.log.warning("this script's " .. path .. " has no counterpart now")
+end
+
+-- An item as those engines showed it: its object by the slot the level
+-- gives it, its room as `room`.
+local function legacy_item(item)
+  if item == nil then
+    return nil
+  end
+  return setmetatable({}, {
+    __index = function(_, key)
+      if key == "object_id" then
+        local slot = engine.catalog.to_slot(engine.catalog.Context.OBJECTS, item.object_id)
+        return slot or item.object_id
+      elseif key == "room" then
+        return item.room_num
+      end
+      return item[key]
+    end,
+    __newindex = function(_, key, value)
+      if key == "room" then
+        key = "room_num"
+      elseif key == "object_id" then
+        engine.log.warning("an item's object can no longer change")
+        return
+      elseif key == "max_hit_points" then
+        -- An entry of the item's properties now, which the maximum follows.
+        item.properties.max_hit_points = value
+        return
+      end
+      item[key] = value
+    end,
+  })
+end
+
+local LEGACY_TRX = {
+  EventType = { LEVEL_LOAD = "LEVEL_LOAD", LEVEL_START = "LEVEL_START", CONTROL = "CONTROL", PICKUP = "PICKUP" },
+  Events = {},
+  Items = {
+    Count = function()
+      return engine.items.count()
+    end,
+    Get = function(index)
+      return legacy_item(engine.items[index - 1])
+    end,
+    GetByName = function(name)
+      return legacy_item(engine.items[name])
+    end,
+  },
+  Lara = {
+    GetItem = function()
+      return legacy_item(engine.lara.item)
+    end,
+  },
+  Log = {
+    Info = function(message) engine.log.info(tostring(message)) end,
+    Warn = function(message) engine.log.warning(tostring(message)) end,
+    Error = function(message) engine.log.error(tostring(message)) end,
+    Debug = function(message) engine.log.debug(tostring(message)) end,
+  },
+  Console = {
+    Log = function(message) return call("console.log", tostring(message)) end,
+    Eval = function(text, opts) return call("console.eval", text, opts) end,
+    Clear = function() return call("console.clear") end,
+  },
+  Music = {
+    GetTrack = function() return call("music.get_track") end,
+    PlayTrack = function(id, opts)
+      local track = engine.music.tracks[id]
+      if track ~= nil then
+        return track:play(opts)
+      end
+    end,
+    Pause = function() return call("music.pause") end,
+    Unpause = function() return call("music.unpause") end,
+    Stop = function() return call("music.stop") end,
+  },
+  Sound = {
+    IsAvailable = function(id) return call("sound.is_available", id) end,
+    Play = function(id, opts) return call("sound.play", id, opts) end,
+    Stop = function(id) return call("sound.stop", id) end,
+    StopAll = function() return call("sound.stop_all") end,
+  },
+  Config = {
+    Get = function(key) return call("config.get", key) end,
+    Set = function(key, value) return call("config.set", key, value) end,
+    List = function() return call("config.list") end,
+  },
+}
+
+-- LEVEL_LOAD came before a savegame was read, LEVEL_START after it: what
+-- a LEVEL_LOAD handler sets that the savegame keeps, such as hit points,
+-- is the savegame's once it is read.
+function LEGACY_TRX.Events.Listen(event_type, callback)
+  local level = function()
+    local current = engine.game.current_level
+    return current ~= nil and current.num or nil
+  end
+  if event_type == "LEVEL_LOAD" then
+    return engine.events.on_game_start(function(is_save)
+      local saved = {}
+      if is_save then
+        for num = 0, engine.items.count() - 1 do
+          local item = engine.items[num]
+          if item ~= nil then
+            saved[num] = item.hit_points
+          end
+        end
+      end
+      callback(level())
+      for num, hit_points in pairs(saved) do
+        pcall(function() engine.items[num].hit_points = hit_points end)
+      end
+    end)
+  elseif event_type == "LEVEL_START" then
+    return engine.events.on_game_start(function()
+      callback(level())
+    end)
+  elseif event_type == "CONTROL" then
+    return engine.events.after_control(function()
+      callback()
+    end)
+  elseif event_type == "PICKUP" then
+    return engine.events.on_pickup(function(item_num)
+      callback(item_num)
+    end)
+  end
+  engine.log.warning("this script listens for an event TRX no longer has: " .. tostring(event_type))
+end
+
 local built = {}
 
 -- Called with a release; `once` says which set-up functions have run, for
@@ -1402,6 +1545,6 @@ return setmetatable({ once = once_done }, {
       made = table.pack(build(from))
       built[from] = made
     end
-    return made[1], made[2]
+    return made[1], made[2], LEGACY_TRX
   end,
 })

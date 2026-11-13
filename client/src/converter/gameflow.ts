@@ -1,6 +1,7 @@
 import type { MappedFile } from './types.ts';
 import { parseJSON5 } from './json5.ts';
-import { parseTR2Script } from './tombpc.ts';
+import { parseTR2Script, tr2RealTrack } from './tombpc.ts';
+import { readLevel, remapMusicTriggers } from './level.ts';
 import { getTemplate, getTemplateFiles, getCfgFile } from '../templates/index.ts';
 import { cfgGameflow, dressClassicGame, translateLegacy } from './legacy.ts';
 import { currentInjectionName } from './stock.ts';
@@ -8,17 +9,11 @@ import { currentInjectionName } from './stock.ts';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyObj = Record<string, any>;
 
-// Track numbers from TRX catalog_music.csv that are engine-hardcoded
-// and must remain at their exact file position (not shifted by cdOffset).
-const TR2_CATALOG_TRACKS = new Set([
-    18, 19, 20, 21, 22, 23, 24, 43, 48, 49, 57, 59,
-]);
-
-const TR3_CATALOG_TRACKS = new Set([
-    82, 83, 86, 89, 90, 95, 96, 98,
-    107, 108, 109, 110, 112, 113, 114, 115, 116, 117, 118, 119,
-    122,
-]);
+/**
+ * Where setupCustomGameflow leaves how many music triggers of a TR2 game it
+ * renumbered to the files tomb2.exe played, for migrate.ts to say so.
+ */
+export const MUSIC_NOTE = '_meta/music_renumbered';
 
 // Lara's home in each game, which the passport offers apart from the levels
 // a new game plays.
@@ -240,12 +235,18 @@ async function buildGameflow(
         } else {
             result.push(...outfitFiles);
         }
-        return result;
+        // An engine that reads a game flow of its own never reads a
+        // TOMBPC.DAT the archive carries beside it, left over from the
+        // original game; taken for the game's script, it would have the
+        // game played by the original engine's rules (levelrules.ts).
+        return scriptEntry ? result.filter((f) => f !== scriptEntry) : result;
     }
 
     if (scriptEntry && gameVersion >= 2) {
         try {
             const scriptInfo = parseTR2Script(scriptEntry.data, gameVersion);
+            // A TR2 script numbers music as tomb2.exe did (tr2RealTrack).
+            const scriptTrack = (track: number): number => (gameVersion === 2 ? tr2RealTrack(track) : track);
             if (scriptInfo && scriptInfo.filenames.length > 1) {
                 const tplText = getTemplate(templateMod, 'gameflow.json5');
                 const gameflow = parseJSON5(tplText) as AnyObj;
@@ -276,7 +277,7 @@ async function buildGameflow(
                 }
                 gameflow.title = {
                     path: titlePath ?? 'title.tr2',
-                    music_track: scriptInfo.titleSoundId,
+                    music_track: scriptTrack(scriptInfo.titleSoundId),
                     sequence: [{ type: 'exit_to_title' }],
                 };
 
@@ -298,7 +299,7 @@ async function buildGameflow(
                     cutsceneIds[i] = gameflow.cutscenes.length;
                     gameflow.cutscenes.push({
                         path: base,
-                        music_track: scriptInfo.cutsceneTracks[i],
+                        music_track: scriptTrack(scriptInfo.cutsceneTracks[i]),
                         lara_outfit: defaultOutfit,
                         sequence: [{ type: 'loop_game' }],
                     });
@@ -313,6 +314,8 @@ async function buildGameflow(
                         } else if (event.type === 'play_cutscene') {
                             if (!(event.cutscene_id in cutsceneIds)) continue;
                             out.push({ ...event, cutscene_id: cutsceneIds[event.cutscene_id] });
+                        } else if (event.type === 'play_music') {
+                            out.push({ ...event, music_track: scriptTrack(event.music_track) });
                         } else {
                             out.push(event);
                         }
@@ -332,7 +335,7 @@ async function buildGameflow(
                         JSON.stringify(templateLevel));
                     entry.path = base;
                     entry.lara_outfit = defaultOutfit;
-                    entry.music_track = scriptInfo.musicTracks[i];
+                    entry.music_track = scriptTrack(scriptInfo.musicTracks[i]);
                     if (scriptInfo.sequences[i]) {
                         entry.sequence = renumber(scriptInfo.sequences[i] as AnyObj[]);
                     }
@@ -434,45 +437,25 @@ async function buildGameflow(
                 const strFiles = generateStrings(modDir, templateMod, titleEntries);
                 result.push(...outfitFiles, ...strFiles);
 
-                if (scriptInfo.cdOffset !== 0) {
-                    const mPrefix = modPrefix + 'music/';
-                    const catalogTracks = gameVersion === 3
-                        ? TR3_CATALOG_TRACKS : TR2_CATALOG_TRACKS;
-
-                    const sourceNums = new Set<number>();
-                    for (let i = 0; i < result.length; i++) {
-                        const mp = result[i].path;
-                        if (mp.indexOf(mPrefix) !== 0) continue;
-                        const fn = mp.substring(mPrefix.length);
-                        const m = fn.match(/^(\d+)(\..*)/);
-                        if (m) sourceNums.add(parseInt(m[1]));
-                    }
-
-                    const catalogInSource = new Set<number>();
-                    sourceNums.forEach(function(n) {
-                        if (catalogTracks.has(n))
-                            catalogInSource.add(n);
-                    });
-
-                    let i = 0;
-                    while (i < result.length) {
-                        const mp = result[i].path;
-                        if (mp.indexOf(mPrefix) !== 0) { i++; continue; }
-                        const fn = mp.substring(mPrefix.length);
-                        const m = fn.match(/^(\d+)(\..*)/);
-                        if (!m) { i++; continue; }
-                        const srcNum = parseInt(m[1]);
-                        const dstNum = srcNum + scriptInfo.cdOffset;
-
-                        if (catalogInSource.has(srcNum)) {
-                            i++;
-                        } else if (catalogInSource.has(dstNum)) {
-                            result.splice(i, 1);
-                        } else {
-                            result[i].path = mPrefix + dstNum + m[2];
-                            i++;
+                // tomb2.exe played the file Music_GetRealTrack gave for the
+                // numbers its script and the levels' triggers name, which TRX
+                // plays as they stand (tombpc.ts tr2RealTrack): both are
+                // renumbered to the files, and the game's own music keeps
+                // the names the original engine looked it up by.
+                if (gameVersion === 2) {
+                    let triggers = 0;
+                    for (const file of result) {
+                        if (!/\/(levels|cuts)\/[^/]+\.tr2$/i.test(file.path)) continue;
+                        const level = readLevel(file.data);
+                        if (level === null) continue;
+                        const copy = file.data.slice();
+                        const n = remapMusicTriggers(copy, level, tr2RealTrack);
+                        if (n > 0) {
+                            file.data = copy;
+                            triggers += n;
                         }
                     }
+                    result.push({ path: modPrefix + MUSIC_NOTE, data: new TextEncoder().encode(String(triggers)) });
                 }
                 // The original engine drew Lara from her levels.
                 dressClassicGame(result, modDir, gameVersion);

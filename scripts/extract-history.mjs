@@ -1,7 +1,7 @@
 // Writes client/src/converter/history.generated.ts from TRX's git history:
 //
 // - STOCK_BLOBS: the git blob id of every injection, catalog, weapons,
-//   inventory ring, outfits and settings preset file TRX has shipped, by file
+//   inventory ring, outfits and settings preset file and script TRX has shipped, by file
 //   name. Level builders copy these into their games, and a copy left as it
 //   was is better served by the TRX the game now runs on than by the build it
 //   came from.
@@ -16,7 +16,7 @@ import { writeFileSync } from 'node:fs';
 const trx = process.argv[2] ?? '../TRX';
 const git = (...args) => execFileSync('git', ['-C', trx, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
 
-const STOCK = /(^|\/)(injections\/[^/]+\.bin|catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5|cfg\/outfits\.json5|cfg\/presets\/[^/]+\.json5)$/;
+const STOCK = /(^|\/)(injections\/[^/]+\.bin|catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5|cfg\/outfits\.json5|cfg\/presets\/[^/]+\.json5|scripts\/[^/]+\.lua)$/;
 
 // Every version any commit has held, not only the releases': builders play
 // development builds too (TRX 1.10.2-304-g1f5f941, say) and ship the files

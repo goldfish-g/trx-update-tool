@@ -14,6 +14,8 @@ const FMV_EXTS   = ['.mp4', '.rpl', '.ogv', '.avi', '.fmv'];
 const AUDIO_EXTS = ['.wad'];
 const REMASTER_SKIP_EXTS = ['.trg', '.dds', '.trm', '.pdp', '.map', '.tex'];
 const ROOT_MARKERS = ['data', 'datag', 'fmv', 'music', 'audio', 'cuts', 'tracks', 'sfx'];
+/** Where a laid-out archive's engine cfg/ data files wait until mapFiles knows whether the game has its own. */
+const CFG_DATA = '_meta/cfg_data/';
 
 const LANG_NAMES: Record<string, string> = {
     de: 'German',   en: 'English',  es: 'Spanish',
@@ -201,9 +203,11 @@ type ArchiveShape = {
     laidOutArchive: boolean;
     /** It has the game flow of a game of its own, for TR1X, TR2X or TRX up to 1.4. */
     ownGameflow: boolean;
+    /** The directory under games/ that holds the game, lowercase, where the archive lays one out. */
+    gameDir: string | null;
 };
 
-function classifyFile(lowerPath: string, _originalRelPath: string, modId: string, { laidOutArchive, ownGameflow }: ArchiveShape): string | null {
+function classifyFile(lowerPath: string, _originalRelPath: string, modId: string, { laidOutArchive, ownGameflow, gameDir }: ArchiveShape): string | null {
     const ext = getExt(lowerPath);
     const lowerBase = lowerPath.split('/').pop()!;
     const prefix = 'games/' + modId + '/';
@@ -213,10 +217,12 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     }
 
     // A package already laid out for TRX keeps its tree: its gameflow,
-    // strings, catalogs, scripts, images and injections.
-    const laidOut = /^games\/[^/]+\/(.+)$/.exec(lowerPath);
+    // strings, catalogs, scripts, images and injections, where TRX looks
+    // for each (a picture in images/og/ is not one in images/). The games
+    // TRX ships beside it, such as tr3-level, are TRX's own.
+    const laidOut = /^games\/([^/]+)\/(.+)$/.exec(lowerPath);
     if (laidOut) {
-        return prefix + laidOut[1];
+        return gameDir === null || laidOut[1] === gameDir ? prefix + laidOut[2] : null;
     }
 
     // The game flow and strings of the engines before TRX, which
@@ -268,10 +274,12 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     }
     // TRX 1.0 to 1.4 kept a game's catalogs, weapons and inventory ring in
     // cfg/, where they now go in its own directory. A game laid out for a
-    // later TRX keeps the ones it has there.
+    // later TRX keeps the ones it has there, and TRX up to 1.12 went on to
+    // the engine's cfg/ for those it had not: which those are, only the
+    // whole archive tells (mapFiles).
     const cfgData = /^cfg\/(catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5)$/.exec(lowerPath);
     if (cfgData) {
-        return laidOutArchive ? null : prefix + cfgData[1];
+        return prefix + (laidOutArchive ? CFG_DATA : '') + cfgData[1];
     }
     // A catalog beside the game flow: the game's own directory, taken for
     // the archive's root when it holds its music too.
@@ -294,6 +302,11 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     if (ext === '.webp' || ext === '.png' || ext === '.jpg'
         || ext === '.bmp' || ext === '.pcx') {
         return prefix + 'images/' + lowerBase;
+    }
+
+    // The index of a soundtrack in one file (cdaudio.ts), beside it.
+    if (lowerBase === 'cdaudio.dat') {
+        return prefix + 'audio/' + lowerBase;
     }
 
     if (lowerBase === 'tombpc.dat') {
@@ -330,8 +343,34 @@ function relativePath(rawPath: string, root: string): string {
     return relPath.replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
+/**
+ * The game of an archive laid out as TRX 1.5 and later lay games out, in
+ * games/<dir>/ beside the engine, which may ship games of its own there
+ * (tr1-level, tr3-level): the one holding the most levels. Its root is the
+ * directory above games/, where the engine's cfg/ is.
+ */
+function laidOutGame(entries: MappedFile[]): { root: string; dir: string } | null {
+    const games = new Map<string, { root: string; dir: string; levels: number }>();
+    for (const entry of entries) {
+        const m = /^(.*?)games\/([^/]+)\/gameflow\.json5$/i.exec(entry.path.replace(/\\/g, '/'));
+        if (m && (m[1] === '' || m[1]!.endsWith('/'))) {
+            games.set((m[1] + 'games/' + m[2] + '/').toLowerCase(), { root: m[1]!, dir: m[2]!.toLowerCase(), levels: 0 });
+        }
+    }
+    if (games.size === 0) return null;
+    for (const entry of entries) {
+        const lower = entry.path.replace(/\\/g, '/').toLowerCase();
+        if (!hasExt(getExt(lower), LEVEL_EXTS)) continue;
+        for (const [at, game] of games) if (lower.startsWith(at)) game.levels++;
+    }
+    let best: { root: string; dir: string; levels: number } | null = null;
+    for (const game of games.values()) if (best === null || game.levels > best.levels) best = game;
+    return best && { root: best.root, dir: best.dir };
+}
+
 function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
-    const root = detectRoot(entries);
+    const game = laidOutGame(entries);
+    const root = game?.root ?? detectRoot(entries);
     // Tomb Raider III Community Edition plays The Lost Artifact from datag/
     // and pixg/, in place of data/ and pix/. A game laid out that way is the
     // expansion, and those are its files.
@@ -339,6 +378,7 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
     const shape: ArchiveShape = {
         laidOutArchive: entries.some((e) => /^games\/[^/]+\/gameflow\.json5$/i.test(relativePath(e.path, root))),
         ownGameflow: entries.some((e) => /^cfg\/(?:tr\d\/gameflow|(?:tomb[123]main|tr1x|tr2x)_gameflow)\.json5$/i.test(relativePath(e.path, root))),
+        gameDir: game?.dir ?? null,
     };
 
     const mapped: MappedFile[] = [];
@@ -362,7 +402,11 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const vfsPath = classifyFile(lowerPath, relPath, modId, shape) ?? engineCfgPath(lowerPath, modId);
         if (vfsPath) {
             mapped.push({ path: vfsPath, data: data });
-            depths.push(relPath.split('/').length);
+            // In a laid-out archive the game's own directory comes first, and
+            // the engine's (data/, music/, fmv/) only where it has none, as
+            // TRX looks a file up.
+            const outside = shape.gameDir !== null && !lowerPath.startsWith(`games/${shape.gameDir}/`);
+            depths.push(relPath.split('/').length + (outside ? 1000 : 0));
         }
     }
 
@@ -395,7 +439,13 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         const scores = new Map(scripts.map((i) => [i, named(i)]));
         nearest[scriptPath] = scripts.reduce((a, b) => (scores.get(b)! > scores.get(a)! || (scores.get(b) === scores.get(a) && depths[b] < depths[a]) ? b : a));
     }
-    const out = mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
+    const kept = mapped.filter(function(_file, i) { return nearest[mapped[i].path] === i; });
+    // The engine's cfg/ copy of a data file is the game's where its own
+    // directory has none (laid-out archives, classifyFile).
+    const cfgData = `games/${modId}/${CFG_DATA}`;
+    const paths = new Set(kept.map((f) => f.path));
+    const out = kept.filter((f) => !f.path.startsWith(cfgData) || !paths.has(`games/${modId}/${f.path.slice(cfgData.length)}`))
+        .map((f) => (f.path.startsWith(cfgData) ? { path: `games/${modId}/${f.path.slice(cfgData.length)}`, data: f.data } : f));
     if (gold) out.push({ path: `games/${modId}/${GOLD_MARKER}`, data: new Uint8Array([1]) });
     // Which engine the game shipped with, which tells how to read its files.
     const engine = archiveEngine(entries);

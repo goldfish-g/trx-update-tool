@@ -35,11 +35,21 @@ async function blobId(data: Uint8Array): Promise<string> {
     return Array.from(digest.subarray(0, 8), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** A text file with the line ends git keeps, as an editor on Windows may have rewritten them. */
+function withUnixLineEnds(data: Uint8Array): Uint8Array | null {
+    if (!data.includes(13)) return null;
+    const out: number[] = [];
+    for (let i = 0; i < data.length; i++) if (!(data[i] === 13 && data[i + 1] === 10)) out.push(data[i]!);
+    return Uint8Array.from(out);
+}
+
 /** Whether a file is one TRX shipped under its name, unchanged. */
 export async function isStock(file: MappedFile): Promise<boolean> {
     const known = STOCK_BLOBS[baseName(file.path)];
     if (!known) return false;
-    return known.includes(await blobId(file.data));
+    if (known.includes(await blobId(file.data))) return true;
+    const unix = file.path.toLowerCase().endsWith('.bin') ? null : withUnixLineEnds(file.data);
+    return unix !== null && known.includes(await blobId(unix));
 }
 
 let injectionsByBlob: Map<string, string[]> | null = null;

@@ -29,7 +29,6 @@ export type ScriptInfo = {
     musicTracks: number[];
     sequences: (Record<string, unknown>[] | null)[];
     titleSoundId: number;
-    cdOffset: number;
     // The title screen's files: its level, then its pictures.
     titleFiles: string[];
     fmvFiles: string[];
