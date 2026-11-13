@@ -154,23 +154,30 @@ const RENAMED_SETTINGS: Record<string, SettingRename> = {
 };
 
 /**
+ * Gives settings their current names, in place, keeping any they already
+ * give by those. Returns how many it renamed.
+ */
+export function renameSettingKeys(settings: AnyObj): number {
+    let renamed = 0;
+    for (const [key, value] of Object.entries(settings)) {
+        const rename = RENAMED_SETTINGS[key];
+        if (!rename) continue;
+        for (const [now, to] of rename(value)) {
+            if (!(now in settings)) settings[now] = to;
+        }
+        delete settings[key];
+        renamed++;
+    }
+    return renamed;
+}
+
+/**
  * Gives the settings a game flow enforces and hides their current names,
  * keeping any it already gives by those. Returns how many it renamed.
  */
 function renameSettings(gameflow: AnyObj): number {
     let renamed = 0;
-    const enforced = gameflow.enforced_config;
-    if (isObject(enforced)) {
-        for (const [key, value] of Object.entries(enforced)) {
-            const rename = RENAMED_SETTINGS[key];
-            if (!rename) continue;
-            for (const [now, to] of rename(value)) {
-                if (!(now in enforced)) enforced[now] = to;
-            }
-            delete enforced[key];
-            renamed++;
-        }
-    }
+    if (isObject(gameflow.enforced_config)) renamed += renameSettingKeys(gameflow.enforced_config);
     if (Array.isArray(gameflow.hidden_config)) {
         const names: unknown[] = gameflow.hidden_config.flatMap((name: unknown) => {
             if (typeof name !== 'string' || !RENAMED_SETTINGS[name]) return [name];

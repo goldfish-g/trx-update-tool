@@ -1,9 +1,10 @@
 // Writes client/src/converter/history.generated.ts from TRX's git history:
 //
-// - STOCK_BLOBS: the git blob id of every injection, catalog, weapons and
-//   inventory ring file TRX has shipped, by file name. Level builders copy
-//   these into their games, and a copy left as it was is better served by the
-//   TRX the game now runs on than by the release it came from.
+// - STOCK_BLOBS: the git blob id of every injection, catalog, weapons,
+//   inventory ring, outfits and settings preset file TRX has shipped, by file
+//   name. Level builders copy these into their games, and a copy left as it
+//   was is better served by the TRX the game now runs on than by the build it
+//   came from.
 // - GAME_STRING_IDS: the flat string ids of TRX 1.3 and before, by the path
 //   the current strings files give the same text.
 //
@@ -15,19 +16,26 @@ import { writeFileSync } from 'node:fs';
 const trx = process.argv[2] ?? '../TRX';
 const git = (...args) => execFileSync('git', ['-C', trx, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
 
-const STOCK = /(^|\/)(injections\/[^/]+\.bin|catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5)$/;
+const STOCK = /(^|\/)(injections\/[^/]+\.bin|catalog_[a-z_]+\.csv|weapons\.json5|inv_ring\.json5|cfg\/outfits\.json5|cfg\/presets\/[^/]+\.json5)$/;
 
-const refs = git('tag', '-l').split('\n').filter((t) => /^(trx|tr1|tr2|tr3)-\d/.test(t));
-refs.push('HEAD');
+// Every version any commit has held, not only the releases': builders play
+// development builds too (TRX 1.10.2-304-g1f5f941, say) and ship the files
+// those had. Branches, tags and remotes, but no stash.
 const blobs = {};
-for (const ref of refs) {
-    for (const line of git('ls-tree', '-r', ref, '--', 'data').split('\n')) {
-        const m = /^\d+ blob ([0-9a-f]{40})\t(.+)$/.exec(line);
-        if (!m || !STOCK.test(m[2])) continue;
-        const name = m[2].split('/').pop().toLowerCase();
-        // Sixteen hex digits tell the few thousand versions apart.
-        (blobs[name] ??= new Set()).add(m[1].slice(0, 16));
-    }
+const add = (blob, path) => {
+    if (!STOCK.test(path) || /^0+$/.test(blob)) return;
+    const name = path.split('/').pop().toLowerCase();
+    // Sixteen hex digits tell the few thousand versions apart.
+    (blobs[name] ??= new Set()).add(blob.slice(0, 16));
+};
+const log = git('log', '--branches', '--tags', '--remotes', '--root', '-m', '--no-renames', '--raw', '--no-abbrev', '--format=', '--', 'data');
+for (const line of log.split('\n')) {
+    const m = /^:\d+ \d+ [0-9a-f]{40} ([0-9a-f]{40}) [A-Z]\d*\t(.+)$/.exec(line);
+    if (m) add(m[1], m[2]);
+}
+for (const line of git('ls-tree', '-r', 'HEAD', '--', 'data').split('\n')) {
+    const m = /^\d+ blob ([0-9a-f]{40})\t(.+)$/.exec(line);
+    if (m) add(m[1], m[2]);
 }
 
 // Strings: JSON5 read leniently, then flattened to slash paths.

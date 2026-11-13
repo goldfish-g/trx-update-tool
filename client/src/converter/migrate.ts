@@ -14,6 +14,8 @@ import { CURRENT_RELEASE, detectRelease, migrateScripts } from './lua.ts';
 import { migrateOutfits } from './outfits.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { checkPlayable, settleObjects, settleReferences, type BaseNeed } from './references.ts';
+import { keepOwnPresets, keepStartingSettings } from './settings.ts';
+import { carryEngineStrings } from './strings.ts';
 import type { MappedFile } from './types.ts';
 
 export type MigrationResult = {
@@ -57,12 +59,16 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     if (base.lostArtifact) notes.push('Made for The Lost Artifact, which it keeps apart from Tomb Raider III.');
     const scripts = migrateScripts(files, options.modDir, options.gameVersion, guess.release, base.gameScript);
     notes.push(...scripts.notes);
-    notes.push(...migrateOutfits(scripts.files, options.modDir, guess.release, options.gameVersion));
+    notes.push(...await migrateOutfits(scripts.files, options.modDir, guess.release, options.gameVersion));
     const rules = applyLevelRules(scripts.files, options.modDir, options.gameVersion, guess.release, base);
     notes.push(...rules.notes);
     const data = await migrateDataFiles(rules.files, options.modDir, options.gameVersion, guess.release);
     notes.push(...data.notes);
     notes.push(...await rebuildFonts(data.files, options.modDir, options.gameVersion));
+    notes.push(...keepStartingSettings(data.files, options.modDir, options.gameVersion));
+    const presets = await keepOwnPresets(data.files, options.modDir);
+    notes.push(...presets.notes);
+    notes.push(...await carryEngineStrings(data.files, options.modDir, guess.release, options.gameVersion, presets.names));
     const needs: BaseNeed[] = [];
     notes.push(...settleReferences(data.files, options.modDir, options.gameVersion, { fetchBase: options.fetchBase, needs }));
     notes.push(...settleObjects(data.files, options.modDir, options.gameVersion));

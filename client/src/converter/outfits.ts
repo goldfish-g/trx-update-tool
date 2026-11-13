@@ -6,7 +6,11 @@
 // the file has to match whichever objects the game really uses:
 //
 // - A game that injects lara_outfits.bin uses TRX's current objects, so it
-//   takes TRX's current outfits, plus any outfit of its own.
+//   takes TRX's current outfits, plus any outfit of its own. A copy of the
+//   file from any TRX build, a development one included, gives way to the
+//   current one (datafiles.ts, stock.ts).
+// - A game that brings a lara_outfits.bin of its own uses its objects, so
+//   it keeps its own outfits file.
 // - A game that does not carries the objects in its levels, laid out as its
 //   own release had them, so it keeps the outfits file of that release.
 //
@@ -17,6 +21,7 @@ import { getCfgFile } from '../templates/index.ts';
 import { BASE_FILES } from '../templates/base/index.ts';
 import { moveObject, readLevelObjects } from './level.ts';
 import { parseJSON5 } from './json5.ts';
+import { isStock } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -106,7 +111,7 @@ function injectsOutfits(gameflowText: string): boolean {
  * from its own (games/<mod>/outfits.json5, or the cfg/outfits.json5 the
  * archive carried, kept at _meta/outfits.json5).
  */
-export function migrateOutfits(files: MappedFile[], modDir: string, release: number | null, gameVersion: number): string[] {
+export async function migrateOutfits(files: MappedFile[], modDir: string, release: number | null, gameVersion: number): Promise<string[]> {
     const prefix = `games/${modDir}/`;
     const decoder = new TextDecoder();
     const gameflow = files.find((f) => f.path === prefix + 'gameflow.json5');
@@ -124,9 +129,21 @@ export function migrateOutfits(files: MappedFile[], modDir: string, release: num
     // The converter's own outfit of the level's meshes is already current.
     if (own.outfits && own.outfits.level_default) return [];
 
+    // A lara_outfits.bin of the game's own, rather than a copy of one TRX
+    // shipped, answers before TRX's (the game's directory comes first), and
+    // its objects are laid out as the game's own outfits file says.
+    const objects = files.find((f) => f.path.toLowerCase() === prefix + 'injections/lara_outfits.bin');
+    const ownObjects = objects !== undefined && !(await isStock(objects));
+
     let result: AnyObj;
     let note: string;
-    if (injectsOutfits(decoder.decode(gameflow.data))) {
+    if (ownObjects) {
+        result = currentOutfitFormat(own);
+        note = 'Kept the outfit file the game was made with, as it brings outfit objects of its own.';
+    } else if (injectsOutfits(decoder.decode(gameflow.data))) {
+        // A copy of the file of some TRX build, development ones included,
+        // in cfg/ has no outfit of the game's own, whatever that build had.
+        if (!modFile && await isStock(source)) return [];
         // TRX's objects, so TRX's outfits; the game's own ones go on top.
         const shipped = parseJSON5(getCfgFile('outfits.json5')) as AnyObj;
         const mine = currentOutfitFormat(own);

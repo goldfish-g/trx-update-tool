@@ -303,6 +303,25 @@ function classifyFile(lowerPath: string, _originalRelPath: string, modId: string
     return null;
 }
 
+/**
+ * The engine's files the game was made with, which sit in the engine's cfg/
+ * wherever the archive's root turned out to be: an archive laid out as a
+ * whole TRX (games/tr3/audio/...) has its root in the game's directory,
+ * below them. Its outfits (outfits.ts), the settings the engine wrote while
+ * the builder played and its settings presets (settings.ts), and the game
+ * strings every game shares, which the builder may have edited (strings.ts).
+ */
+function engineCfgPath(lowerPath: string, modId: string): string | null {
+    const prefix = 'games/' + modId + '/_meta/';
+    const strings = /(?:^|\/)cfg\/((?:base_strings|trx_common_strings)(?:-[a-z0-9-]+)?\.json5)$/.exec(lowerPath);
+    if (strings) return prefix + 'engine_strings/' + strings[1];
+    const preset = /(?:^|\/)cfg\/presets\/([^/]+\.json5)$/.exec(lowerPath);
+    if (preset) return prefix + 'presets/' + preset[1];
+    const match = /(?:^|\/)cfg\/(outfits|tr[1-3]x|tomb1main)\.json5$/.exec(lowerPath);
+    if (!match) return null;
+    return match[1] === 'outfits' ? prefix + 'outfits.json5' : prefix + 'settings/' + match[1] + '.json5';
+}
+
 function relativePath(rawPath: string, root: string): string {
     let relPath = rawPath;
     if (root && relPath.toLowerCase().indexOf(root.toLowerCase()) === 0) {
@@ -340,7 +359,7 @@ function mapFiles(entries: MappedFile[], modId: string): MappedFile[] {
         // with its metadata, and the __MACOSX directory holding them.
         if (/(^|\/)__macosx\//.test(lowerPath) || /(^|\/)\._[^/]*$/.test(lowerPath)) continue;
 
-        const vfsPath = classifyFile(lowerPath, relPath, modId, shape);
+        const vfsPath = classifyFile(lowerPath, relPath, modId, shape) ?? engineCfgPath(lowerPath, modId);
         if (vfsPath) {
             mapped.push({ path: vfsPath, data: data });
             depths.push(relPath.split('/').length);
