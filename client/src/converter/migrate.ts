@@ -15,6 +15,7 @@ import { migrateOutfits } from './outfits.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { splitCdAudio } from './cdaudio.ts';
 import { MUSIC_NOTE } from './gameflow.ts';
+import { keepOwnPictures } from './pictures.ts';
 import { checkPlayable, settleObjects, settleReferences, type BaseNeed } from './references.ts';
 import { keepOwnPresets, keepStartingSettings } from './settings.ts';
 import { carryEngineStrings } from './strings.ts';
@@ -80,6 +81,9 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     const presets = await keepOwnPresets(data.files, options.modDir);
     notes.push(...presets.notes);
     notes.push(...await carryEngineStrings(data.files, options.modDir, guess.release, options.gameVersion, presets.names));
+    const pictures = await keepOwnPictures(data.files, options.modDir);
+    data.files = pictures.files;
+    notes.push(...pictures.notes);
     if (options.gameVersion === 2) {
         const tombpc = data.files.some((f) => f.path === `games/${options.modDir}/tombpc.dat`);
         const soundtrack = splitCdAudio(data.files, options.modDir, tombpc);

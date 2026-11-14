@@ -11,7 +11,7 @@ import { archiveEngine, executableVersion, trxRelease } from './engine.ts';
 import { parseJSON5 } from './json5.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { luaObjectRenames } from './objects.ts';
-import { isStock } from './stock.ts';
+import { isOriginalLevel, isStock } from './stock.ts';
 import type { MappedFile } from './types.ts';
 
 /** The TRX 1.x release the converter writes for. */
@@ -506,11 +506,14 @@ export function migrateScripts(
  * The game's copies of scripts TRX shipped (history.generated.ts), as a game
  * laid out as a whole TRX brings them all. A copy of the game script gives
  * way to the one TRX ships for the game it extends, which TRX runs where a
- * game has none of its own. A copy of a level script becomes the script TRX
- * ships under that name now, with what TRX has moved into it since (the
- * assault course's timer, say): TRX runs a level's script from the game's
- * own directory only. Returns the scripts that are TRX's own now, which need
- * no compatibility module (migrateScripts).
+ * game has none of its own. A copy of a level script for the original level
+ * of its name becomes the script TRX ships under that name now, with what TRX
+ * has moved into it since (the assault course's timer, say): TRX runs a
+ * level's script from the game's own directory only. Where the level of that
+ * name is one the builder made, the copy stays as the builder's engine ran
+ * it, since TRX's script now is written for TRX's level and not theirs.
+ * Returns the scripts that are TRX's own now, which need no compatibility
+ * module (migrateScripts).
  *
  * TRX 1.10 to 1.12 also ran a level's script, and the game script, from the
  * engine's data/scripts/ where the game had none of its own: those of a game
@@ -536,21 +539,35 @@ export async function settleStockScripts(
     if (candidates.length === 0) return { files: all, current, notes: [] };
     const { BASE_LEVEL_SCRIPTS } = await import('../templates/base/level_scripts.ts');
     const dropped = new Set<MappedFile>();
+    const kept: string[] = [];
+    const game = `games/${modDir}/`;
+    // The level file a level script goes with, by its name, where the game brings one.
+    const levelOf = (stem: string): MappedFile | undefined => all.find((f) => {
+        if (!f.path.startsWith(game)) return false;
+        const m = /(?:^|\/)([^/]+)\.(?:phd|tr2|tub|psx)$/i.exec(f.path);
+        return m !== null && m[1]!.toLowerCase() === stem;
+    });
     for (const file of candidates) {
         if (!await isStock(file)) continue;
         const name = file.path.slice(prefix.length).toLowerCase();
         const now = BASE_LEVEL_SCRIPTS[`tr${gameVersion}/${name}`];
+        const level = levelOf(name.replace(/\.lua$/, ''));
         if (name === '_game.lua') {
             dropped.add(file);
-        } else if (now !== undefined) {
+        } else if (now !== undefined && (level === undefined || await isOriginalLevel(level, gameVersion))) {
             file.data = new TextEncoder().encode(now);
             current.add(file.path);
+        } else if (now !== undefined) {
+            kept.push(name.replace(/\.lua$/, ''));
         }
     }
     const notes: string[] = [];
     const count = dropped.size + current.size;
     if (count > 0) {
         notes.push(`Gave ${count} unchanged cop${count === 1 ? 'y' : 'ies'} of TRX's own scripts the current version${count === 1 ? '' : 's'}.`);
+    }
+    if (kept.length > 0) {
+        notes.push(`Kept the copies of TRX's own scripts for ${kept.join(', ')} as its engine ran them, since ${kept.length === 1 ? 'that level is' : 'those levels are'} the builder's own and not TRX's.`);
     }
     return { files: all.filter((f) => !dropped.has(f)), current, notes };
 }

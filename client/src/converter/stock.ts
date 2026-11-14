@@ -6,7 +6,9 @@
 // copy left under its own name does.
 
 import { BASE_INJECTIONS } from '../templates/base/index.ts';
+import { ORIGINAL_LEVELS } from './basefiles.generated.ts';
 import { STOCK_BLOBS } from './history.generated.ts';
+import { STOCK_PICTURES } from './stockpictures.generated.ts';
 import type { MappedFile } from './types.ts';
 
 const encoder = new TextEncoder();
@@ -50,6 +52,18 @@ export async function isStock(file: MappedFile): Promise<boolean> {
     if (known.includes(await blobId(file.data))) return true;
     const unix = file.path.toLowerCase().endsWith('.bin') ? null : withUnixLineEnds(file.data);
     return unix !== null && known.includes(await blobId(unix));
+}
+
+/** Whether a picture is one TRX ships for its games (stockpictures.generated.ts), unchanged. */
+export async function isStockPicture(file: MappedFile): Promise<boolean> {
+    const known = STOCK_PICTURES[baseName(file.path)];
+    return known !== undefined && known.includes(await blobId(file.data));
+}
+
+/** Whether a level file is the original game's level of its name, unchanged, rather than one a builder made. */
+export async function isOriginalLevel(file: MappedFile, gameVersion: number): Promise<boolean> {
+    const known = ORIGINAL_LEVELS[gameVersion]?.[baseName(file.path)];
+    return known !== undefined && known === await blobId(file.data);
 }
 
 let injectionsByBlob: Map<string, string[]> | null = null;

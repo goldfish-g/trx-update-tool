@@ -4,10 +4,13 @@
 // their videos, music tracks and sound file, by the names a level's game
 // flow gives them. The app fetches such files from the server that holds the
 // games, so a converted game plays without the player owning the original.
+// With each level, the id of its contents, which tells a copy of it from a
+// level of the same name a builder made.
 //
 // Usage: node scripts/extract-basefiles.mjs <tr1.zip> <tr2.zip> <tr3.zip>,
 // the server's archives of the games, laid out as games/trN/....
 
+import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { unzipSync } from 'fflate';
 import { cdTracks } from '../client/src/converter/level.ts';
@@ -16,6 +19,10 @@ const WAD_ENTRIES = 130;
 const WAD_ENTRY_BYTES = 268;
 
 const out = {};
+// Each level and cutscene by the id git would give its contents, cut to 16
+// hex digits as history.generated.ts keeps them.
+const originals = {};
+const blobId = (data) => createHash('sha1').update(`blob ${data.length}\0`).update(data).digest('hex').slice(0, 16);
 process.argv.slice(2).forEach((archive, index) => {
     const game = index + 1;
     const data = new Uint8Array(readFileSync(archive));
@@ -52,6 +59,10 @@ process.argv.slice(2).forEach((archive, index) => {
             if (table.getUint32(i * WAD_ENTRY_BYTES + 260, true) > 0) music.add(i);
         }
     }
+    originals[game] = Object.fromEntries(Object.entries(files)
+        .filter(([path]) => /\/(levels|cuts)\/[^/]+\.(phd|tr2|tub)$/i.test(path))
+        .map(([path, bytes]) => [base(path), blobId(bytes)])
+        .sort(([a], [b]) => a.localeCompare(b)));
     const sfx = list.some((path) => /\/main\.sfx$/i.test(path));
     out[game] = { levels: levelsOf('levels'), cuts: levelsOf('cuts'), fmvs, music: [...music].sort((a, b) => a - b), sfx };
 });
@@ -68,6 +79,9 @@ writeFileSync('client/src/converter/basefiles.generated.ts', [
     'export type BaseGameFiles = { levels: Record<string, number[]>; cuts: Record<string, number[]>; fmvs: string[]; music: number[]; sfx: boolean };',
     '',
     `export const BASE_GAME_FILES: Record<number, BaseGameFiles> = ${JSON.stringify(out)};`,
+    '',
+    '/** Each original level and cutscene by name, with the id of its contents (16 hex digits of its git blob id). */',
+    `export const ORIGINAL_LEVELS: Record<number, Record<string, string>> = ${JSON.stringify(originals)};`,
     '',
 ].join('\n'));
 console.log(Object.entries(out).map(([game, files]) => `TR${game}: ${Object.keys(files.levels).length} levels, ${Object.keys(files.cuts).length} cutscenes, ${files.fmvs.length} videos, ${files.music.length} tracks, sfx ${files.sfx}; tracks of ${Object.keys(files.levels)[1]}: ${Object.values(files.levels)[1]}`).join('\n'));
