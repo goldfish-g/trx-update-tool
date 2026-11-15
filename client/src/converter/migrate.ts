@@ -15,7 +15,7 @@ import { migrateOutfits } from './outfits.ts';
 import { LEGACY_MARKER } from './legacy.ts';
 import { splitCdAudio } from './cdaudio.ts';
 import { MUSIC_NOTE } from './gameflow.ts';
-import { keepOwnPictures } from './pictures.ts';
+import { keepMissingPictures, keepOwnPictures } from './pictures.ts';
 import { checkPlayable, settleObjects, settleReferences, type BaseNeed } from './references.ts';
 import { keepOwnPresets, keepStartingSettings } from './settings.ts';
 import { carryEngineStrings } from './strings.ts';
@@ -93,6 +93,7 @@ export async function migrateToCurrentTRX(files: MappedFile[], options: Migratio
     const needs: BaseNeed[] = [];
     notes.push(...settleReferences(data.files, options.modDir, options.gameVersion, { fetchBase: options.fetchBase, needs }));
     notes.push(...settleObjects(data.files, options.modDir, options.gameVersion));
+    notes.push(...keepMissingPictures(data.files, options.modDir, options.upload));
     checkPlayable(data.files, options.modDir, options.gameVersion);
 
     // Working files of the converter's own.

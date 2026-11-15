@@ -349,7 +349,7 @@ function relativePath(rawPath: string, root: string): string {
  * (tr1-level, tr3-level): the one holding the most levels. Its root is the
  * directory above games/, where the engine's cfg/ is.
  */
-function laidOutGame(entries: MappedFile[]): { root: string; dir: string } | null {
+export function laidOutGame(entries: MappedFile[]): { root: string; dir: string } | null {
     const games = new Map<string, { root: string; dir: string; levels: number }>();
     for (const entry of entries) {
         const m = /^(.*?)games\/([^/]+)\/gameflow\.json5$/i.exec(entry.path.replace(/\\/g, '/'));
