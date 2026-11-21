@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import type { MappedFile, Language, GameVersion } from './converter/types.ts';
 import { extractArchive, processFiles, filterByLanguage, detectGameVersion } from './converter/gamedata.ts';
 import { setupCustomGameflow } from './converter/gameflow.ts';
+import { checkHasLevels } from './converter/references.ts';
 import { migrateToCurrentTRX } from './converter/migrate.ts';
 import { createOutputZip } from './converter/zip.ts';
 import { Header } from './components/Header.tsx';
@@ -122,6 +123,7 @@ function App() {
     if (mapped.length === 0) {
       throw new Error('No recognised game files found. Please provide your original Tomb Raider game files.');
     }
+    checkHasLevels(filteredEntries, mapped);
 
     setState({ step: 'converting', message: 'Generating gameflow...', progress: 0.65 });
 

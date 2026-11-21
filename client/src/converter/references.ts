@@ -406,6 +406,66 @@ export function settleObjects(files: MappedFile[], modDir: string, gameVersion: 
 export class UnplayableLevelError extends Error {}
 
 /**
+ * The names of the files in a ZIP appended to a program, as self-extracting
+ * programs carry their files, or null when it carries none.
+ */
+function appendedZipNames(data: Uint8Array): string[] | null {
+    const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    // The end record sits in the last 22 bytes, before a comment of up to 64 KB.
+    let end = -1;
+    for (let at = data.length - 22; at >= Math.max(0, data.length - 22 - 0xffff); at--) {
+        if (view.getUint32(at, true) === 0x06054b50) {
+            end = at;
+            break;
+        }
+    }
+    if (end < 0) return null;
+    const count = view.getUint16(end + 10, true);
+    const size = view.getUint32(end + 12, true);
+    // The directory's offset counts from the ZIP's start, which is after the program.
+    const directory = end - size;
+    if (directory < 0) return null;
+    const names: string[] = [];
+    let at = directory;
+    for (let i = 0; i < count && at + 46 <= end; i++) {
+        if (view.getUint32(at, true) !== 0x02014b50) return null;
+        const nameLength = view.getUint16(at + 28, true);
+        names.push(new TextDecoder().decode(data.subarray(at + 46, at + 46 + nameLength)).replace(/\\/g, '/'));
+        at += 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+    }
+    return names;
+}
+
+/**
+ * Throws when the files hold no level at all, which would leave a game flow
+ * with nothing to play: TRX would refuse it at start. Some builders ship a
+ * game only as a Windows program: an installer, or a mod of Tomb Raider I-III
+ * Remastered, whose program carries the Remastered games with their code
+ * changed (tomb1.dll, tomb2.dll, tomb3.dll, a hooked winmm.dll) in a ZIP
+ * appended to it (TRCustoms 3972). TRX runs none of that code.
+ */
+export function checkHasLevels(upload: MappedFile[], mapped: MappedFile[]): void {
+    if (mapped.some((file) => /\.(phd|tr2)$/i.test(file.path))) return;
+    const programs = upload.filter((file) => /\.exe$/i.test(file.path));
+    for (const program of programs) {
+        const names = appendedZipNames(program.data) ?? [];
+        if (names.some((name) => /(^|\/)tomb123\.exe$/i.test(name) || /(^|\/)[123]\/tomb[123]\.dll$/i.test(name))) {
+            throw new UnplayableLevelError(
+                `TRX cannot play this level: it is a mod of Tomb Raider I-III Remastered, which comes as a Windows program `
+                + `(${baseName(program.path)}) that runs the Remastered games with their own code changed.`,
+            );
+        }
+    }
+    if (programs.length > 0) {
+        const names = programs.map((program) => baseName(program.path));
+        throw new UnplayableLevelError(
+            `TRX cannot play this level: it comes as a Windows program (${names.join(', ')}) and has no level files TRX can read.`,
+        );
+    }
+    throw new UnplayableLevelError('TRX cannot play this level: its files hold no level.');
+}
+
+/**
  * Throws when a level the game plays has items of object slots TRX's
  * catalog for the game, with the game's own on top, does not have: TRX
  * refuses to load such a level ("item N names no object"). Tomb Raider III
